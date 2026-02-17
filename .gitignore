@@ -202,3 +202,6 @@ pip-selfcheck.json
 
 # End of https://www.toptal.com/developers/gitignore/api/linux,venv,python/venv
 ./__pycache__
+
+# Dagster files
+.tmp_dagster_home_*/
