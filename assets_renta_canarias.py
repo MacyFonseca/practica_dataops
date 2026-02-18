@@ -42,6 +42,7 @@ def cargar_codigos_municipios() -> pd.DataFrame:
     """
     Carga el archivo codislas.csv que contiene la información de municipios.
     Proporciona códigos, nombres de municipios e islas para el enriquecimiento de datos.
+    Normaliza dinámicamente formato de nombres invertidos (ej: "Palma, La" → "La Palma").
     """
     csv_path = Path(__file__).parent / "codislas.csv"
     
@@ -50,11 +51,26 @@ def cargar_codigos_municipios() -> pd.DataFrame:
     # Normalizar nombres de columnas
     df.columns = df.columns.str.strip()
     
-    # Limpiar y normalizar nombres de municipios para coincidir con el dataset de rentas
-    df['NOMBRE_NORMALIZADO'] = df['NOMBRE'].str.strip()
+    # Función genérica para normalizar nombres invertidos
+    # Invierte formato "Nombre, Artículo" (ej: "Palma, La") a "Artículo Nombre" (ej: "La Palma")
+    def normalizar_nombre_invertido(nombre_str):
+        nombre_str = nombre_str.strip()
+        # Detectar si tiene coma (formato invertido)
+        if ',' in nombre_str:
+            partes = [p.strip() for p in nombre_str.split(',')]
+            if len(partes) == 2:
+                # Invertir: "Palma, La" → "La Palma"
+                return f"{partes[1]} {partes[0]}"
+        return nombre_str
+    
+    # Aplicar normalización a nombres de municipios
+    df['NOMBRE_NORMALIZADO'] = df['NOMBRE'].str.strip().apply(normalizar_nombre_invertido)
+    
+    # Aplicar normalización a nombres de islas
+    df['ISLA_NORMALIZADO'] = df['ISLA'].str.strip().apply(normalizar_nombre_invertido)
     
     print(f"\n Códigos de municipios cargados: {df.shape[0]} registros")
-    print(f"Islas disponibles: {df['ISLA'].unique().tolist()}")
+    print(f"Islas disponibles (normalizadas): {sorted(df['ISLA_NORMALIZADO'].unique().tolist())}")
     
     return df
 
@@ -65,37 +81,55 @@ def dataset_renta_con_municipios(
     cargar_codigos_municipios: pd.DataFrame
 ) -> pd.DataFrame:
     """
-    Integra la información de municipios del dataset de cargos con el dataset de rentas.
-    Enriquece los datos con códigos de municipio, isla y normaliza nombres para mejor visualización.
+    Integra la información de municipios e islas con el dataset de rentas.
+    Enriquece los datos haciendo merge en dos fases:
+    1. Merge por nombre de municipio para registros municipales
+    2. Merge por nombre de isla normalizado para registros agregados
     """
     df_renta = cargar_dataset_renta.copy()
     df_municipios = cargar_codigos_municipios.copy()
     
-    # Crear diccionario de mapeo de nombres de municipios (caso insensible)
-    mapeo_municipios = {}
-    for idx, row in df_municipios.iterrows():
-        nombre_limpio = row['NOMBRE_NORMALIZADO'].lower().strip()
-        mapeo_municipios[nombre_limpio] = {
-            'ISLA': row['ISLA'].strip(),
-            'CMUN': row['CMUN'],
-            'CISLA': row['CISLA'],
-            'NOMBRE_MUNICIPIO': row['NOMBRE_NORMALIZADO']
-        }
-    
     # Normalizar nombres de territorio en el dataset de rentas
-    df_renta['TERRITORIO_NORMALIZADO'] = df_renta['TERRITORIO#es'].str.lower().strip()
+    # Remover dinámicamente caracteres especiales "?"
+    df_renta['TERRITORIO#es'] = df_renta['TERRITORIO#es'].str.replace(r'[?]', '', regex=True).str.strip()
+    df_renta['TERRITORIO_LIMPIO'] = df_renta['TERRITORIO#es'].str.strip().str.lower()
     
-    # Realizar merge a través del nombre normalizado
+    # Preparar dataframe para merge por municipio
+    df_municipios_merge = df_municipios[['NOMBRE_NORMALIZADO', 'ISLA_NORMALIZADO', 'ISLA', 'CMUN', 'CISLA']].copy()
+    df_municipios_merge['NOMBRE_LIMPIO'] = df_municipios_merge['NOMBRE_NORMALIZADO'].str.lower()
+    df_municipios_merge = df_municipios_merge[['NOMBRE_LIMPIO', 'ISLA_NORMALIZADO', 'ISLA', 'CMUN', 'CISLA']].drop_duplicates(subset=['NOMBRE_LIMPIO'])
+    
+    # Preparar dataframe para merge por isla
+    df_islas_merge = df_municipios[['ISLA_NORMALIZADO', 'ISLA']].drop_duplicates()
+    df_islas_merge['ISLA_LIMPIA'] = df_islas_merge['ISLA_NORMALIZADO'].str.lower()
+    df_islas_merge = df_islas_merge[['ISLA_LIMPIA', 'ISLA_NORMALIZADO', 'ISLA']]
+    
+    # Merge con municipios
     df_enriquecido = df_renta.merge(
-        df_municipios[['NOMBRE_NORMALIZADO', 'ISLA', 'CMUN', 'CISLA']].rename(
-            columns={'NOMBRE_NORMALIZADO': 'TERRITORIO_NORMALIZADO'}
-        ),
-        on='TERRITORIO_NORMALIZADO',
+        df_municipios_merge.rename(columns={'NOMBRE_LIMPIO': 'TERRITORIO_LIMPIO'}),
+        on='TERRITORIO_LIMPIO',
         how='left'
     )
     
+    # Merge con islas para los registros que no encontraron municipio
+    sin_isla = df_enriquecido[df_enriquecido['ISLA_NORMALIZADO'].isna()].copy()
+    if len(sin_isla) > 0:
+        sin_isla_merge = sin_isla.merge(
+            df_islas_merge.rename(columns={'ISLA_LIMPIA': 'TERRITORIO_LIMPIO'}),
+            on='TERRITORIO_LIMPIO',
+            how='left'
+        )
+        # Actualizar solo las filas que obtuvieron información de isla
+        mask = sin_isla_merge['ISLA_NORMALIZADO_y'].notna()
+        df_enriquecido.loc[sin_isla.index, 'ISLA_NORMALIZADO'] = sin_isla_merge.loc[mask, 'ISLA_NORMALIZADO_y']
+        df_enriquecido.loc[sin_isla.index, 'ISLA'] = sin_isla_merge.loc[mask, 'ISLA_y']
+    
+    # Usar ISLA_NORMALIZADO como columna principal, fallback a ISLA si es necesario
+    df_enriquecido['ISLA_FINAL'] = df_enriquecido['ISLA_NORMALIZADO'].fillna(df_enriquecido['ISLA'])
+    
     print(f"\n Dataset enriquecido: {df_enriquecido.shape[0]} registros")
-    print(f"Municipios con información de isla: {df_enriquecido['ISLA'].notna().sum()}")
+    print(f"Registros con información de isla: {df_enriquecido['ISLA_FINAL'].notna().sum()}")
+    print(f"Islas encontradas: {sorted(df_enriquecido[df_enriquecido['ISLA_FINAL'].notna()]['ISLA_FINAL'].unique().tolist())}")
     
     return df_enriquecido
 
@@ -124,13 +158,13 @@ def dataset_renta_limpio(dataset_renta_con_municipios: pd.DataFrame) -> pd.DataF
     
     # Crear etiqueta de municipio enriquecida (con isla si está disponible)
     df['MUNICIPIO_ISLA'] = df.apply(
-        lambda row: f"{row['TERRITORIO#es']} ({row['ISLA']})" if pd.notna(row['ISLA']) 
+        lambda row: f"{row['TERRITORIO#es']} ({row['ISLA_FINAL']})" if pd.notna(row['ISLA_FINAL']) 
         else row['TERRITORIO#es'],
         axis=1
     )
     
     print(f"\n Dataset limpio: {df.shape[0]} registros válidos")
-    print(f"Registros con información de isla: {df['ISLA'].notna().sum()}")
+    print(f"Registros con información de isla: {df['ISLA_FINAL'].notna().sum()}")
     
     return df
 
@@ -272,13 +306,13 @@ def grafico_ingresos_por_isla(dataset_renta_limpio: pd.DataFrame):
     Visualiza cómo se distribuyen las diferentes medidas de ingreso en cada isla.
     """
     # Filtrar solo los registros con información de isla
-    df_islas = dataset_renta_limpio[dataset_renta_limpio['ISLA'].notna()].copy()
+    df_islas = dataset_renta_limpio[dataset_renta_limpio['ISLA_FINAL'].notna()].copy()
     
     # Agrupar por isla y medida
-    df_isla_medida = df_islas.groupby(['ISLA', 'MEDIDAS#es'])['OBS_VALUE'].sum().reset_index()
+    df_isla_medida = df_islas.groupby(['ISLA_FINAL', 'MEDIDAS#es'])['OBS_VALUE'].sum().reset_index()
     
     grafico = (
-        ggplot(df_isla_medida, aes(x='ISLA', y='OBS_VALUE', fill='MEDIDAS#es')) +
+        ggplot(df_isla_medida, aes(x='ISLA_FINAL', y='OBS_VALUE', fill='MEDIDAS#es')) +
         geom_bar(stat='identity') +
         labs(
             title='Distribución de Fuentes de Ingreso por Isla (Canarias)',
