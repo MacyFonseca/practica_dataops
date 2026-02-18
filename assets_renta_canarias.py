@@ -11,7 +11,7 @@ from dagster import asset
 from plotnine import (
     ggplot, aes, geom_bar, geom_line, geom_point, 
     scale_x_continuous, scale_y_continuous,
-    theme_minimal, labs, theme, element_text, facet_wrap
+    theme_minimal, labs, theme, element_text, facet_wrap, geom_tile
 )
 
 # CAPA 1: Extracción de Datos
@@ -76,6 +76,37 @@ def cargar_codigos_municipios() -> pd.DataFrame:
 
 
 @asset
+def cargar_nivel_estudios() -> pd.DataFrame:
+    """
+    Carga el archivo nivelestudios.xlsx con información de nivel de estudios.
+    Contiene datos desglosados por municipio, sexo, nacionalidad y período.
+    """
+    xlsx_path = Path(__file__).parent / "nivelestudios.xlsx"
+    
+    df = pd.read_excel(xlsx_path, sheet_name=0)
+    
+    # Normalizar nombres de columnas
+    df.columns = df.columns.str.strip()
+    
+    # Extraer código de municipio y nombre del campo 'Municipios de 500 habitantes o más'
+    # Formato: "35001 Agaete" -> código: 35001, nombre: Agaete
+    df[['CMUN_EST', 'MUNICIPIO_EST']] = df['Municipios de 500 habitantes o más'].str.split(' ', n=1, expand=True)
+    df['CMUN_EST'] = df['CMUN_EST'].astype(int)
+    df['MUNICIPIO_EST'] = df['MUNICIPIO_EST'].str.strip()
+    
+    # Normalizar columnas para merge
+    df['Periodo'] = pd.to_datetime(df['Periodo']).dt.year
+    df.rename(columns={'Periodo': 'Año_Estudios'}, inplace=True)
+    
+    print(f"\n Nivel de estudios cargado: {df.shape[0]} registros")
+    print(f"Períodos: {sorted(df['Año_Estudios'].unique())}")
+    print(f"Niveles de estudios: {df['Nivel de estudios en curso'].nunique()} categorías")
+    print(f"Municipios: {df['MUNICIPIO_EST'].nunique()} únicos")
+    
+    return df
+
+
+@asset
 def dataset_renta_con_municipios(
     cargar_dataset_renta: pd.DataFrame,
     cargar_codigos_municipios: pd.DataFrame
@@ -134,19 +165,58 @@ def dataset_renta_con_municipios(
     return df_enriquecido
 
 
+@asset
+def dataset_renta_con_estudios(
+    dataset_renta_con_municipios: pd.DataFrame,
+    cargar_nivel_estudios: pd.DataFrame
+) -> pd.DataFrame:
+    """
+    Integra información de nivel de estudios con datos de rentas.
+    Agrega datos de educación por municipio a nivel agregado (sin desglose por sexo/nacionalidad).
+    """
+    df_renta = dataset_renta_con_municipios.copy()
+    df_estudios = cargar_nivel_estudios.copy()
+    
+    # Obtener solo totales agregados (Sexo='Total', Nacionalidad no importa para agregado)
+    df_estudios_total = df_estudios[df_estudios['Sexo'] == 'Total'].copy()
+    
+    # Agrupar por municipio, año y nivel de estudios (sumando totales por nacionalidad)
+    df_estudios_agg = df_estudios_total.groupby(
+        ['CMUN_EST', 'MUNICIPIO_EST', 'Año_Estudios', 'Nivel de estudios en curso']
+    )['Total'].sum().reset_index()
+    
+    # Preparar nombres para merge
+    df_estudios_agg['TERRITORIO_NORMALIZADO'] = df_estudios_agg['MUNICIPIO_EST'].str.lower().strip()
+    
+    # Merge con datos de renta (left join para mantener todos los registros de renta)
+    # Usamos CMUN para asegurar coincidencia correcta
+    df_enriquecido = df_renta.merge(
+        df_estudios_agg[['CMUN_EST', 'Año_Estudios', 'Nivel de estudios en curso', 'Total']].rename(
+            columns={'CMUN_EST': 'CMUN', 'Total': 'Total_Estudiantes', 'Año_Estudios': 'TIME_PERIOD#es'}
+        ),
+        on=['CMUN', 'TIME_PERIOD#es'],
+        how='left'
+    )
+    
+    print(f"\n Dataset con estudios integrado: {df_enriquecido.shape[0]} registros")
+    print(f"Registros con información de nivel de estudios: {df_enriquecido['Nivel de estudios en curso'].notna().sum()}")
+    
+    return df_enriquecido
+
+
 
 # CAPA 2: Transformación y Preparación de Datos
 
 @asset
-def dataset_renta_limpio(dataset_renta_con_municipios: pd.DataFrame) -> pd.DataFrame:
+def dataset_renta_limpio(dataset_renta_con_estudios: pd.DataFrame) -> pd.DataFrame:
     """
     Limpia y prepara el dataset para el análisis.
     - Filtra valores nulos
     - Convierte tipos de datos
     - Crea columnas adicionales para el análisis
-    - Utiliza datos enriquecidos con información de municipios
+    - Utiliza datos enriquecidos con información de municipios y nivel de estudios
     """
-    df = dataset_renta_con_municipios.copy()
+    df = dataset_renta_con_estudios.copy()
     
     # Eliminar registros con valores nulos o confidenciales
     df = df.dropna(subset=['OBS_VALUE'])
@@ -165,6 +235,7 @@ def dataset_renta_limpio(dataset_renta_con_municipios: pd.DataFrame) -> pd.DataF
     
     print(f"\n Dataset limpio: {df.shape[0]} registros válidos")
     print(f"Registros con información de isla: {df['ISLA_FINAL'].notna().sum()}")
+    print(f"Registros con información de nivel de estudios: {df['Nivel de estudios en curso'].notna().sum()}")
     
     return df
 
@@ -335,6 +406,152 @@ def grafico_ingresos_por_isla(dataset_renta_limpio: pd.DataFrame):
     return grafico
 
 
+@asset
+def grafico_nivel_estudios_distribucion(dataset_renta_limpio: pd.DataFrame):
+    """
+    Crea un gráfico de distribución de nivel de estudios en Canarias.
+    Muestra la proporción de estudiantes en cada nivel educativo (años 2021-2023).
+    """
+    # Filtrar registros con información de nivel de estudios
+    df_estudios = dataset_renta_limpio[dataset_renta_limpio['Nivel de estudios en curso'].notna()].copy()
+    
+    # Excluir categoría "Total" para obtener distribución real
+    df_estudios = df_estudios[df_estudios['Nivel de estudios en curso'] != 'Total']
+    
+    # Agrupar por nivel de estudios
+    df_nivel = df_estudios.groupby('Nivel de estudios en curso')['Total_Estudiantes'].sum().reset_index()
+    
+    # Crear etiquetas más cortas para mejor visualización
+    nivel_labels = {
+        'Educación primaria e inferior': 'Primaria e inferior',
+        'Primera etapa de Educación Secundaria y similar': 'ESO o similar',
+        'Segunda etapa de educación secundaria, con orientación general': 'Bachillerato',
+        'Segunda etapa de Educación Secundaria, con orientación profesional (con y sin continuidad en la educación superior); Educación postsecundaria no superior': 'FP',
+        'Educación superior': 'Superior',
+        'Cursa estudios pero no hay información sobre los mismos': 'Información faltante',
+        'No cursa estudios': 'No cursa'
+    }
+    df_nivel['Nivel_Corto'] = df_nivel['Nivel de estudios en curso'].map(nivel_labels)
+    
+    grafico = (
+        ggplot(df_nivel, aes(x='Nivel_Corto', y='Total_Estudiantes', fill='Nivel_Corto')) +
+        geom_bar(stat='identity', show_legend=False) +
+        labs(
+            title='Distribución de Nivel de Estudios en Canarias',
+            x='Nivel de Estudios',
+            y='Total de Estudiantes',
+            caption='Fuente: Estadísticas de Nivel de Estudios 2021-2023\nAcumulado en todos los municipios'
+        ) +
+        theme_minimal() +
+        theme(
+            figure_size=(14, 6),
+            plot_title=element_text(size=14, weight='bold'),
+            axis_title_x=element_text(size=11),
+            axis_title_y=element_text(size=11),
+            axis_text_x=element_text(angle=45, hjust=1),
+        )
+    )
+    
+    return grafico
+
+
+@asset
+def grafico_estudios_por_isla(dataset_renta_limpio: pd.DataFrame):
+    """
+    Crea un gráfico mostrando el nivel de estudios agregado por isla.
+    Utiliza coordenadas Tile para visualizar distribucion geográfica de educación.
+    """
+    # Filtrar registros con información de nivel de estudios e isla
+    df_estudios = dataset_renta_limpio[
+        (dataset_renta_limpio['Nivel de estudios en curso'].notna()) & 
+        (dataset_renta_limpio['ISLA'].notna())
+    ].copy()
+    
+    # Excluir "Total" para análisis real
+    df_estudios = df_estudios[df_estudios['Nivel de estudios en curso'] != 'Total']
+    
+    # Agrupar por isla y nivel
+    df_isla_nivel = df_estudios.groupby(['ISLA', 'Nivel de estudios en curso'])['Total_Estudiantes'].sum().reset_index()
+    
+    # Crear etiquetas cortas
+    nivel_labels = {
+        'Educación primaria e inferior': 'Primaria',
+        'Primera etapa de Educación Secundaria y similar': 'ESO',
+        'Segunda etapa de educación secundaria, con orientación general': 'Bachillerato',
+        'Segunda etapa de Educación Secundaria, con orientación profesional (con y sin continuidad en la educación superior); Educación postsecundaria no superior': 'FP',
+        'Educación superior': 'Superior',
+        'Cursa estudios pero no hay información sobre los mismos': 'Info faltante',
+        'No cursa estudios': 'No cursa'
+    }
+    df_isla_nivel['Nivel_Corto'] = df_isla_nivel['Nivel de estudios en curso'].map(nivel_labels)
+    
+    grafico = (
+        ggplot(df_isla_nivel, aes(x='ISLA', y='Nivel_Corto', fill='Total_Estudiantes')) +
+        geom_tile() +
+        labs(
+            title='Heatmap: Nivel de Estudios por Isla (Canarias)',
+            x='Isla',
+            y='Nivel de Educación',
+            fill='Estudiantes',
+            caption='Fuente: Estadísticas de Nivel de Estudios 2021-2023\nIntensidad de color indica cantidad de estudiantes'
+        ) +
+        theme_minimal() +
+        theme(
+            figure_size=(12, 8),
+            plot_title=element_text(size=14, weight='bold'),
+            axis_title_x=element_text(size=11),
+            axis_title_y=element_text(size=11),
+            axis_text_x=element_text(angle=45, hjust=1),
+        )
+    )
+    
+    return grafico
+
+
+@asset
+def grafico_tendencia_ingresos_estudios(dataset_renta_limpio: pd.DataFrame):
+    """
+    Crea un gráfico de tendencia mostrando evolución de ingresos totales por período,
+    superpuesto con indicador de estudiantes en educación superior por año.
+    """
+    # Preparar datos de ingresos por año
+    df_ingresos = dataset_renta_limpio[dataset_renta_limpio['ISLA'].notna()].copy()
+    df_ing_año = df_ingresos.groupby('TIME_PERIOD#es')['OBS_VALUE'].sum().reset_index()
+    df_ing_año.columns = ['Año', 'Ingresos_Total']
+    
+    # Preparar datos de estudiantes en educación superior por año
+    df_estudios = dataset_renta_limpio[
+        (dataset_renta_limpio['Nivel de estudios en curso'] == 'Educación superior') &
+        (dataset_renta_limpio['Total_Estudiantes'].notna())
+    ].copy()
+    df_sup_año = df_estudios.groupby('TIME_PERIOD#es')['Total_Estudiantes'].sum().reset_index()
+    df_sup_año.columns = ['Año', 'Estudiantes_Superior']
+    
+    # Merge
+    df_combinado = df_ing_año.merge(df_sup_año, on='Año', how='left')
+    
+    grafico = (
+        ggplot(df_combinado, aes(x='Año', y='Ingresos_Total')) +
+        geom_line(color='#1f77b4', size=1.2) +
+        geom_point(color='#1f77b4', size=3) +
+        labs(
+            title='Tendencia: Ingresos Totales vs Estudiantes en Educación Superior',
+            x='Año',
+            y='Ingresos Totales',
+            caption='Fuente: Datos integrados de Rentas y Nivel de Estudios'
+        ) +
+        theme_minimal() +
+        theme(
+            figure_size=(12, 6),
+            plot_title=element_text(size=14, weight='bold'),
+            axis_title_x=element_text(size=11),
+            axis_title_y=element_text(size=11),
+        )
+    )
+    
+    return grafico
+
+
 # CAPA 4: Guardar Resultados
 
 @asset
@@ -362,20 +579,27 @@ def guardar_graficos_dinamicos(generar_graficos_por_medida):
     return rutas_guardadas
 
 @asset
-def guardar_graficos_resumen(grafico_distribucion_ingressos, grafico_tendencia_total, grafico_ingresos_por_isla):
+def guardar_graficos_resumen(
+    grafico_distribucion_ingressos, 
+    grafico_tendencia_total, 
+    grafico_ingresos_por_isla,
+    grafico_nivel_estudios_distribucion,
+    grafico_estudios_por_isla,
+    grafico_tendencia_ingresos_estudios
+):
     """
-    Guarda los gráficos de resumen (distribución, tendencia e ingresos por isla).
-    Ahora incluye visualizaciones enriquecidas con información de municipios.
+    Guarda todos los gráficos de resumen generados en PNG.
+    Incluye visualizaciones de ingresos, municipios, islas y nivel de estudios.
     """
     output_dir = Path(__file__).parent / "graficos_salida_pipeline"
     output_dir.mkdir(exist_ok=True)
     
-    # Guardar gráfico de distribución
+    # Guardar gráfico de distribución de ingresos
     ruta_distribucion = output_dir / "01_distribucion_porcentajes.png"
     grafico_distribucion_ingressos.save(str(ruta_distribucion), dpi=300, verbose=False)
     print(f"✅ Guardado: {ruta_distribucion}")
     
-    # Guardar gráfico de tendencia
+    # Guardar gráfico de tendencia de ingresos
     ruta_tendencia = output_dir / "02_tendencia_total.png"
     grafico_tendencia_total.save(str(ruta_tendencia), dpi=300, verbose=False)
     print(f"✅ Guardado: {ruta_tendencia}")
@@ -385,10 +609,28 @@ def guardar_graficos_resumen(grafico_distribucion_ingressos, grafico_tendencia_t
     grafico_ingresos_por_isla.save(str(ruta_islas), dpi=300, verbose=False)
     print(f"✅ Guardado: {ruta_islas}")
     
-    print(f"\n Gráficos de resumen guardados en: {output_dir}")
+    # Guardar gráfico de distribución de nivel de estudios
+    ruta_nivel_dist = output_dir / "04_nivel_estudios_distribucion.png"
+    grafico_nivel_estudios_distribucion.save(str(ruta_nivel_dist), dpi=300, verbose=False)
+    print(f"✅ Guardado: {ruta_nivel_dist}")
+    
+    # Guardar gráfico heatmap de estudios por isla
+    ruta_estudios_isla = output_dir / "05_heatmap_estudios_isla.png"
+    grafico_estudios_por_isla.save(str(ruta_estudios_isla), dpi=300, verbose=False)
+    print(f"✅ Guardado: {ruta_estudios_isla}")
+    
+    # Guardar gráfico de tendencia integrada
+    ruta_tendencia_est = output_dir / "06_tendencia_ingresos_estudios.png"
+    grafico_tendencia_ingresos_estudios.save(str(ruta_tendencia_est), dpi=300, verbose=False)
+    print(f"✅ Guardado: {ruta_tendencia_est}")
+    
+    print(f"\n📊 Gráficos de resumen guardados en: {output_dir}")
     
     return {
         'distribucion': str(ruta_distribucion),
         'tendencia': str(ruta_tendencia),
-        'ingresos_por_isla': str(ruta_islas)
+        'ingresos_por_isla': str(ruta_islas),
+        'nivel_estudios': str(ruta_nivel_dist),
+        'heatmap_estudios': str(ruta_estudios_isla),
+        'tendencia_integrada': str(ruta_tendencia_est)
     }
