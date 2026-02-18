@@ -87,12 +87,22 @@ def cargar_nivel_estudios() -> pd.DataFrame:
     
     # Normalizar nombres de columnas
     df.columns = df.columns.str.strip()
+
+    def normalizar_nombre_invertido(nombre_str):
+        nombre_str = nombre_str.strip()
+        # Detectar si tiene coma (formato invertido)
+        if ',' in nombre_str:
+            partes = [p.strip() for p in nombre_str.split(',')]
+            if len(partes) == 2:
+                # Invertir: "Palma, La" → "La Palma"
+                return f"{partes[1]} {partes[0]}"
+        return nombre_str
     
     # Extraer código de municipio y nombre del campo 'Municipios de 500 habitantes o más'
     # Formato: "35001 Agaete" -> código: 35001, nombre: Agaete
     df[['CMUN_EST', 'MUNICIPIO_EST']] = df['Municipios de 500 habitantes o más'].str.split(' ', n=1, expand=True)
     df['CMUN_EST'] = df['CMUN_EST'].astype(int)
-    df['MUNICIPIO_EST'] = df['MUNICIPIO_EST'].str.strip()
+    df['MUNICIPIO_EST'] = df['MUNICIPIO_EST'].str.strip().apply(normalizar_nombre_invertido)
     
     # Normalizar columnas para merge
     df['Periodo'] = pd.to_datetime(df['Periodo']).dt.year
@@ -186,7 +196,7 @@ def dataset_renta_con_estudios(
     )['Total'].sum().reset_index()
     
     # Preparar nombres para merge
-    df_estudios_agg['TERRITORIO_NORMALIZADO'] = df_estudios_agg['MUNICIPIO_EST'].str.lower().strip()
+    df_estudios_agg['TERRITORIO_NORMALIZADO'] = df_estudios_agg['MUNICIPIO_EST'].str.lower().str.strip()
     
     # Merge con datos de renta (left join para mantener todos los registros de renta)
     # Usamos CMUN para asegurar coincidencia correcta
