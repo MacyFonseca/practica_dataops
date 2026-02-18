@@ -209,3 +209,4 @@ pip-selfcheck.json
 # Other
 extras_pipeline/
 graficos_*/
+.~lock*
