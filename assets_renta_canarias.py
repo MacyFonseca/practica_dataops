@@ -1,7 +1,8 @@
 """
 Assets para visualizar la distribución de rentas en Canarias siguiendo principios DataOps con Dagster.
 Utiliza plotnine para crear gráficos de forma iterativa.
-Integra información de municipios desde codislas.csv para enriquecer las visualizaciones.
+Integra información de municipios desde codislas.csv
+y niveles de estudios desde nivelestudios.xlsx para enriquecer las visualizaciones.
 """
 
 import pandas as pd
@@ -20,8 +21,8 @@ from plotnine import (
 def cargar_dataset_renta() -> pd.DataFrame:
     """
     Carga el dataset de distribución de rentas en Canarias desde el CSV.
-    Este asset es la fuente de verdad para todos los análisis posteriores.
-    """
+    El dataset contiene información de ingresos por municipio, isla, año y tipo de ingreso.
+    Normaliza los nombres de columnas para facilitar su uso en etapas posteriores."""
     csv_path = Path(__file__).parent / "distribucion-renta-canarias.csv"
     
     df = pd.read_csv(csv_path)
@@ -55,11 +56,9 @@ def cargar_codigos_municipios() -> pd.DataFrame:
     # Invierte formato "Nombre, Artículo" (ej: "Palma, La") a "Artículo Nombre" (ej: "La Palma")
     def normalizar_nombre_invertido(nombre_str):
         nombre_str = nombre_str.strip()
-        # Detectar si tiene coma (formato invertido)
         if ',' in nombre_str:
             partes = [p.strip() for p in nombre_str.split(',')]
             if len(partes) == 2:
-                # Invertir: "Palma, La" → "La Palma"
                 return f"{partes[1]} {partes[0]}"
         return nombre_str
     
@@ -90,11 +89,9 @@ def cargar_nivel_estudios() -> pd.DataFrame:
 
     def normalizar_nombre_invertido(nombre_str):
         nombre_str = nombre_str.strip()
-        # Detectar si tiene coma (formato invertido)
         if ',' in nombre_str:
             partes = [p.strip() for p in nombre_str.split(',')]
             if len(partes) == 2:
-                # Invertir: "Palma, La" → "La Palma"
                 return f"{partes[1]} {partes[0]}"
         return nombre_str
     
@@ -131,8 +128,7 @@ def dataset_renta_con_municipios(
     df_municipios = cargar_codigos_municipios.copy()
     
     # Normalizar nombres de territorio en el dataset de rentas
-    # Remover dinámicamente caracteres especiales "?"
-    df_renta['TERRITORIO#es'] = df_renta['TERRITORIO#es'].str.replace(r'[?]', '', regex=True).str.strip()
+    df_renta['TERRITORIO#es'] = df_renta['TERRITORIO#es'].str.strip()
     df_renta['TERRITORIO_LIMPIO'] = df_renta['TERRITORIO#es'].str.strip().str.lower()
     
     # Preparar dataframe para merge por municipio
@@ -183,6 +179,8 @@ def dataset_renta_con_estudios(
     """
     Integra información de nivel de estudios con datos de rentas.
     Agrega datos de educación por municipio a nivel agregado (sin desglose por sexo/nacionalidad).
+    Nota: Usa left join para mantener todos los datos de rentas, aunque algunos registros
+    agregados no tengan correspondencia en estudios (que es normal).
     """
     df_renta = dataset_renta_con_municipios.copy()
     df_estudios = cargar_nivel_estudios.copy()
@@ -190,20 +188,20 @@ def dataset_renta_con_estudios(
     # Obtener solo totales agregados (Sexo='Total', Nacionalidad no importa para agregado)
     df_estudios_total = df_estudios[df_estudios['Sexo'] == 'Total'].copy()
     
-    # Agrupar por municipio, año y nivel de estudios (sumando totales por nacionalidad)
+    # Agrupar por municipio, año y nivel de estudios
     df_estudios_agg = df_estudios_total.groupby(
         ['CMUN_EST', 'MUNICIPIO_EST', 'Año_Estudios', 'Nivel de estudios en curso']
     )['Total'].sum().reset_index()
     
-    # Preparar nombres para merge
-    df_estudios_agg['TERRITORIO_NORMALIZADO'] = df_estudios_agg['MUNICIPIO_EST'].str.lower().str.strip()
+    # Preparar nombres y columnas para merge
+    df_estudios_agg['CMUN'] = df_estudios_agg['CMUN_EST']
+    df_estudios_agg['TIME_PERIOD#es'] = df_estudios_agg['Año_Estudios'].astype(int)
+    df_estudios_agg['Total_Estudiantes'] = df_estudios_agg['Total']
     
     # Merge con datos de renta (left join para mantener todos los registros de renta)
-    # Usamos CMUN para asegurar coincidencia correcta
+    # Esto mantiene registros agregados incluso si no tienen correspondencia en estudios
     df_enriquecido = df_renta.merge(
-        df_estudios_agg[['CMUN_EST', 'Año_Estudios', 'Nivel de estudios en curso', 'Total']].rename(
-            columns={'CMUN_EST': 'CMUN', 'Total': 'Total_Estudiantes', 'Año_Estudios': 'TIME_PERIOD#es'}
-        ),
+        df_estudios_agg[['CMUN', 'TIME_PERIOD#es', 'Nivel de estudios en curso', 'Total_Estudiantes']],
         on=['CMUN', 'TIME_PERIOD#es'],
         how='left'
     )
@@ -214,8 +212,56 @@ def dataset_renta_con_estudios(
     return df_enriquecido
 
 
-
 # CAPA 2: Transformación y Preparación de Datos
+
+@asset
+def dataset_estudios_limpio(
+    cargar_nivel_estudios: pd.DataFrame,
+    cargar_codigos_municipios: pd.DataFrame
+) -> pd.DataFrame:
+    """
+    Prepara datos de nivel de estudios de forma independiente.
+    Enriquece con información de municipios e islas para visualizaciones específicas de educación.
+    """
+    df_estudios = cargar_nivel_estudios.copy()
+    df_municipios = cargar_codigos_municipios.copy()
+    
+    # Obtener solo totales agregados por sexo
+    df_estudios = df_estudios[df_estudios['Sexo'] == 'Total'].copy()
+    
+    # Normalizar años
+    df_estudios['Año'] = pd.to_datetime(df_estudios['Año_Estudios']).dt.year
+    
+    # Extraer CMUN del campo 'Municipios de 500 habitantes o más'
+    df_estudios[['CMUN', 'MUNICIPIO']] = df_estudios['Municipios de 500 habitantes o más'].str.split(' ', n=1, expand=True)
+    df_estudios['CMUN'] = df_estudios['CMUN'].astype(int)
+    
+    # Normalizar nombre de municipio
+    def normalizar_nombre_invertido(nombre_str):
+        nombre_str = nombre_str.strip()
+        if ',' in nombre_str:
+            partes = [p.strip() for p in nombre_str.split(',')]
+            if len(partes) == 2:
+                return f"{partes[1]} {partes[0]}"
+        return nombre_str
+    
+    df_estudios['MUNICIPIO'] = df_estudios['MUNICIPIO'].str.strip().apply(normalizar_nombre_invertido)
+    
+    # Agregar información de isla
+    df_municipios_isla = df_municipios[['CMUN', 'ISLA', 'ISLA_NORMALIZADO']].copy()
+    df_estudios = df_estudios.merge(df_municipios_isla, on='CMUN', how='left')
+    
+    # Excluir categoría "Total" y Nan en nivel de estudios
+    df_estudios = df_estudios[df_estudios['Nivel de estudios en curso'] != 'Total'].copy()
+    df_estudios = df_estudios.dropna(subset=['Nivel de estudios en curso'])
+    
+    print(f"\n Dataset de estudios limpio: {df_estudios.shape[0]} registros válidos")
+    print(f"Años disponibles: {sorted(df_estudios['Año'].unique())}")
+    print(f"Municipios: {df_estudios['MUNICIPIO'].nunique()} únicos")
+    print(f"Islas: {df_estudios['ISLA_NORMALIZADO'].nunique()} islas")
+    
+    return df_estudios
+
 
 @asset
 def dataset_renta_limpio(dataset_renta_con_estudios: pd.DataFrame) -> pd.DataFrame:
@@ -400,7 +446,7 @@ def grafico_ingresos_por_isla(dataset_renta_limpio: pd.DataFrame):
             x='Isla',
             y='Ingreso Total',
             fill='Tipo de Ingreso',
-            caption='Fuente: Estadísticas de Ingresos en Canarias\nDatos desglosados por municipios agrupados por isla'
+            caption='Fuente: Estadísticas de Ingresos en Canarias\nDatos agrupados por isla'
         ) +
         theme_minimal() +
         theme(
@@ -417,26 +463,23 @@ def grafico_ingresos_por_isla(dataset_renta_limpio: pd.DataFrame):
 
 
 @asset
-def grafico_nivel_estudios_distribucion(dataset_renta_limpio: pd.DataFrame):
+def grafico_nivel_estudios_distribucion(dataset_estudios_limpio: pd.DataFrame):
     """
     Crea un gráfico de distribución de nivel de estudios en Canarias.
     Muestra la proporción de estudiantes en cada nivel educativo (años 2021-2023).
+    Utiliza datos de estudios independientes sin dependencia de rentas.
     """
-    # Filtrar registros con información de nivel de estudios
-    df_estudios = dataset_renta_limpio[dataset_renta_limpio['Nivel de estudios en curso'].notna()].copy()
+    df_estudios = dataset_estudios_limpio.copy()
     
-    # Excluir categoría "Total" para obtener distribución real
-    df_estudios = df_estudios[df_estudios['Nivel de estudios en curso'] != 'Total']
-    
-    # Agrupar por nivel de estudios
-    df_nivel = df_estudios.groupby('Nivel de estudios en curso')['Total_Estudiantes'].sum().reset_index()
+    # Agrupar por nivel de estudios sumando estudiantes
+    df_nivel = df_estudios.groupby('Nivel de estudios en curso')['Total'].sum().reset_index()
     
     # Crear etiquetas más cortas para mejor visualización
     nivel_labels = {
         'Educación primaria e inferior': 'Primaria e inferior',
         'Primera etapa de Educación Secundaria y similar': 'ESO o similar',
         'Segunda etapa de educación secundaria, con orientación general': 'Bachillerato',
-        'Segunda etapa de Educación Secundaria, con orientación profesional (con y sin continuidad en la educación superior); Educación postsecundaria no superior': 'FP',
+        'Segunda etapa de Educación Secundaria, con orientación profesional (con y sin continuidad en la educación superior); Educación postsecundaria no superior': 'Formación Profissional',
         'Educación superior': 'Superior',
         'Cursa estudios pero no hay información sobre los mismos': 'Información faltante',
         'No cursa estudios': 'No cursa'
@@ -444,13 +487,13 @@ def grafico_nivel_estudios_distribucion(dataset_renta_limpio: pd.DataFrame):
     df_nivel['Nivel_Corto'] = df_nivel['Nivel de estudios en curso'].map(nivel_labels)
     
     grafico = (
-        ggplot(df_nivel, aes(x='Nivel_Corto', y='Total_Estudiantes', fill='Nivel_Corto')) +
+        ggplot(df_nivel, aes(x='Nivel_Corto', y='Total', fill='Nivel_Corto')) +
         geom_bar(stat='identity', show_legend=False) +
         labs(
             title='Distribución de Nivel de Estudios en Canarias',
             x='Nivel de Estudios',
             y='Total de Estudiantes',
-            caption='Fuente: Estadísticas de Nivel de Estudios 2021-2023\nAcumulado en todos los municipios'
+            caption='Fuente: Estadísticas de Nivel de Estudios 2021-2023'
         ) +
         theme_minimal() +
         theme(
@@ -466,63 +509,14 @@ def grafico_nivel_estudios_distribucion(dataset_renta_limpio: pd.DataFrame):
 
 
 @asset
-def grafico_estudios_por_isla(dataset_renta_limpio: pd.DataFrame):
-    """
-    Crea un gráfico mostrando el nivel de estudios agregado por isla.
-    Utiliza coordenadas Tile para visualizar distribucion geográfica de educación.
-    """
-    # Filtrar registros con información de nivel de estudios e isla
-    df_estudios = dataset_renta_limpio[
-        (dataset_renta_limpio['Nivel de estudios en curso'].notna()) & 
-        (dataset_renta_limpio['ISLA'].notna())
-    ].copy()
-    
-    # Excluir "Total" para análisis real
-    df_estudios = df_estudios[df_estudios['Nivel de estudios en curso'] != 'Total']
-    
-    # Agrupar por isla y nivel
-    df_isla_nivel = df_estudios.groupby(['ISLA', 'Nivel de estudios en curso'])['Total_Estudiantes'].sum().reset_index()
-    
-    # Crear etiquetas cortas
-    nivel_labels = {
-        'Educación primaria e inferior': 'Primaria',
-        'Primera etapa de Educación Secundaria y similar': 'ESO',
-        'Segunda etapa de educación secundaria, con orientación general': 'Bachillerato',
-        'Segunda etapa de Educación Secundaria, con orientación profesional (con y sin continuidad en la educación superior); Educación postsecundaria no superior': 'FP',
-        'Educación superior': 'Superior',
-        'Cursa estudios pero no hay información sobre los mismos': 'Info faltante',
-        'No cursa estudios': 'No cursa'
-    }
-    df_isla_nivel['Nivel_Corto'] = df_isla_nivel['Nivel de estudios en curso'].map(nivel_labels)
-    
-    grafico = (
-        ggplot(df_isla_nivel, aes(x='ISLA', y='Nivel_Corto', fill='Total_Estudiantes')) +
-        geom_tile() +
-        labs(
-            title='Heatmap: Nivel de Estudios por Isla (Canarias)',
-            x='Isla',
-            y='Nivel de Educación',
-            fill='Estudiantes',
-            caption='Fuente: Estadísticas de Nivel de Estudios 2021-2023\nIntensidad de color indica cantidad de estudiantes'
-        ) +
-        theme_minimal() +
-        theme(
-            figure_size=(12, 8),
-            plot_title=element_text(size=14, weight='bold'),
-            axis_title_x=element_text(size=11),
-            axis_title_y=element_text(size=11),
-            axis_text_x=element_text(angle=45, hjust=1),
-        )
-    )
-    
-    return grafico
-
-
-@asset
-def grafico_tendencia_ingresos_estudios(dataset_renta_limpio: pd.DataFrame):
+def grafico_tendencia_ingresos_estudios(
+    dataset_renta_limpio: pd.DataFrame,
+    dataset_estudios_limpio: pd.DataFrame
+):
     """
     Crea un gráfico de tendencia mostrando evolución de ingresos totales por período,
     superpuesto con indicador de estudiantes en educación superior por año.
+    Combina datos de rentas con datos de estudios independientes.
     """
     # Preparar datos de ingresos por año
     df_ingresos = dataset_renta_limpio[dataset_renta_limpio['ISLA'].notna()].copy()
@@ -530,11 +524,10 @@ def grafico_tendencia_ingresos_estudios(dataset_renta_limpio: pd.DataFrame):
     df_ing_año.columns = ['Año', 'Ingresos_Total']
     
     # Preparar datos de estudiantes en educación superior por año
-    df_estudios = dataset_renta_limpio[
-        (dataset_renta_limpio['Nivel de estudios en curso'] == 'Educación superior') &
-        (dataset_renta_limpio['Total_Estudiantes'].notna())
-    ].copy()
-    df_sup_año = df_estudios.groupby('TIME_PERIOD#es')['Total_Estudiantes'].sum().reset_index()
+    df_estudios = dataset_estudios_limpio.copy()
+    df_sup_año = df_estudios[
+        df_estudios['Nivel de estudios en curso'] == 'Educación superior'
+    ].groupby('Año')['Total'].sum().reset_index()
     df_sup_año.columns = ['Año', 'Estudiantes_Superior']
     
     # Merge
@@ -594,7 +587,6 @@ def guardar_graficos_resumen(
     grafico_tendencia_total, 
     grafico_ingresos_por_isla,
     grafico_nivel_estudios_distribucion,
-    grafico_estudios_por_isla,
     grafico_tendencia_ingresos_estudios
 ):
     """
@@ -605,12 +597,12 @@ def guardar_graficos_resumen(
     output_dir.mkdir(exist_ok=True)
     
     # Guardar gráfico de distribución de ingresos
-    ruta_distribucion = output_dir / "01_distribucion_porcentajes.png"
+    ruta_distribucion = output_dir / "01_distribucion_ingressos.png"
     grafico_distribucion_ingressos.save(str(ruta_distribucion), dpi=300, verbose=False)
     print(f"✅ Guardado: {ruta_distribucion}")
     
     # Guardar gráfico de tendencia de ingresos
-    ruta_tendencia = output_dir / "02_tendencia_total.png"
+    ruta_tendencia = output_dir / "02_tendencia_ingressos.png"
     grafico_tendencia_total.save(str(ruta_tendencia), dpi=300, verbose=False)
     print(f"✅ Guardado: {ruta_tendencia}")
     
@@ -623,12 +615,7 @@ def guardar_graficos_resumen(
     ruta_nivel_dist = output_dir / "04_nivel_estudios_distribucion.png"
     grafico_nivel_estudios_distribucion.save(str(ruta_nivel_dist), dpi=300, verbose=False)
     print(f"✅ Guardado: {ruta_nivel_dist}")
-    
-    # Guardar gráfico heatmap de estudios por isla
-    ruta_estudios_isla = output_dir / "05_heatmap_estudios_isla.png"
-    grafico_estudios_por_isla.save(str(ruta_estudios_isla), dpi=300, verbose=False)
-    print(f"✅ Guardado: {ruta_estudios_isla}")
-    
+ 
     # Guardar gráfico de tendencia integrada
     ruta_tendencia_est = output_dir / "06_tendencia_ingresos_estudios.png"
     grafico_tendencia_ingresos_estudios.save(str(ruta_tendencia_est), dpi=300, verbose=False)
@@ -641,6 +628,5 @@ def guardar_graficos_resumen(
         'tendencia': str(ruta_tendencia),
         'ingresos_por_isla': str(ruta_islas),
         'nivel_estudios': str(ruta_nivel_dist),
-        'heatmap_estudios': str(ruta_estudios_isla),
         'tendencia_integrada': str(ruta_tendencia_est)
     }
