@@ -7,11 +7,8 @@ from dagster import Definitions, define_asset_job, in_process_executor
 from assets_renta_canarias import (
     cargar_dataset_renta,
     dataset_renta_limpio,
-    datos_por_medida,
-    generar_graficos_por_medida,
     grafico_distribucion_ingressos,
     grafico_tendencia_total,
-    guardar_graficos_dinamicos,
     guardar_graficos_resumen
 )
 
@@ -34,11 +31,8 @@ defs = Definitions(
     assets=[
         cargar_dataset_renta,
         dataset_renta_limpio,
-        datos_por_medida,
-        generar_graficos_por_medida,
         grafico_distribucion_ingressos,
         grafico_tendencia_total,
-        guardar_graficos_dinamicos,
         guardar_graficos_resumen
     ],
     jobs=[renta_canarias_job],

@@ -296,67 +296,67 @@ def dataset_renta_limpio(dataset_renta_con_estudios: pd.DataFrame) -> pd.DataFra
     return df
 
 
-@asset
-def datos_por_medida(dataset_renta_limpio: pd.DataFrame) -> dict:
-    """
-    Prepara datos agrupados por tipo de medida para procesamiento iterativo.
-    Retorna un diccionario donde cada clave es una medida y el valor es su DataFrame.
-    """
-    medidas = dataset_renta_limpio['MEDIDAS#es'].unique()
-    datos_agrupados = {}
+# @asset
+# def datos_por_medida(dataset_renta_limpio: pd.DataFrame) -> dict:
+#     """
+#     Prepara datos agrupados por tipo de medida para procesamiento iterativo.
+#     Retorna un diccionario donde cada clave es una medida y el valor es su DataFrame.
+#     """
+#     medidas = dataset_renta_limpio['MEDIDAS#es'].unique()
+#     datos_agrupados = {}
     
-    for medida in medidas:
-        df_medida = dataset_renta_limpio[dataset_renta_limpio['MEDIDAS#es'] == medida].copy()
-        datos_agrupados[medida] = df_medida.sort_values('TIME_PERIOD#es')
+#     for medida in medidas:
+#         df_medida = dataset_renta_limpio[dataset_renta_limpio['MEDIDAS#es'] == medida].copy()
+#         datos_agrupados[medida] = df_medida.sort_values('TIME_PERIOD#es')
     
-    print(f"\n Datos organizados por {len(medidas)} medidas diferentes")
+#     print(f"\n Datos organizados por {len(medidas)} medidas diferentes")
     
-    return datos_agrupados
+#     return datos_agrupados
 
 
-# CAPA 3: Visualizaciones Iterativas
+# # CAPA 3: Visualizaciones Iterativas
 
-@asset
-def generar_graficos_por_medida(datos_por_medida: dict):
-    """
-    Genera gráficos de forma iterativa para cada tipo de medida.
-    Retorna una lista de diccionarios con medida, gráfico y nombre de archivo.
-    """
-    graficos_generados = []
+# @asset
+# def generar_graficos_por_medida(datos_por_medida: dict):
+#     """
+#     Genera gráficos de forma iterativa para cada tipo de medida.
+#     Retorna una lista de diccionarios con medida, gráfico y nombre de archivo.
+#     """
+#     graficos_generados = []
     
-    for medida, df_medida in datos_por_medida.items():
-        # Generar nombre válido para archivo
-        nombre_archivo = medida.lower().replace(" ", "_").replace("á", "a")
+#     for medida, df_medida in datos_por_medida.items():
+#         # Generar nombre válido para archivo
+#         nombre_archivo = medida.lower().replace(" ", "_").replace("á", "a")
         
-        # Crear el gráfico
-        grafico = (
-            ggplot(df_medida, aes(x='TIME_PERIOD#es', y='OBS_VALUE')) +
-            geom_line(color='#1f77b4', size=1) +
-            geom_point(color='#1f77b4', size=3) +
-            labs(
-                title=f'Distribución de {medida} (Canarias 2015-2023)',
-                x='Año',
-                y='Ingresso',
-                caption='Fuente: Estadísticas de Ingresos en Canarias'
-            ) +
-            theme_minimal() +
-            theme(
-                figure_size=(10, 6),
-                plot_title=element_text(size=14, weight='bold'),
-                axis_title_x=element_text(size=11),
-                axis_title_y=element_text(size=11),
-            )
-        )
+#         # Crear el gráfico
+#         grafico = (
+#             ggplot(df_medida, aes(x='TIME_PERIOD#es', y='OBS_VALUE')) +
+#             geom_line(color='#1f77b4', size=1) +
+#             geom_point(color='#1f77b4', size=3) +
+#             labs(
+#                 title=f'Distribución de {medida} (Canarias 2015-2023)',
+#                 x='Año',
+#                 y='Ingresso',
+#                 caption='Fuente: Estadísticas de Ingresos en Canarias'
+#             ) +
+#             theme_minimal() +
+#             theme(
+#                 figure_size=(10, 6),
+#                 plot_title=element_text(size=14, weight='bold'),
+#                 axis_title_x=element_text(size=11),
+#                 axis_title_y=element_text(size=11),
+#             )
+#         )
         
-        graficos_generados.append({
-            'medida': medida,
-            'grafico': grafico,
-            'nombre_archivo': nombre_archivo
-        })
+#         graficos_generados.append({
+#             'medida': medida,
+#             'grafico': grafico,
+#             'nombre_archivo': nombre_archivo
+#         })
     
-    print(f"\n Se generaron {len(graficos_generados)} gráficos dinámicamente")
+#     print(f"\n Se generaron {len(graficos_generados)} gráficos dinámicamente")
     
-    return graficos_generados
+#     return graficos_generados
 
 
 @asset
@@ -507,87 +507,38 @@ def grafico_nivel_estudios_distribucion(dataset_estudios_limpio: pd.DataFrame):
     
     return grafico
 
-
-@asset
-def grafico_tendencia_ingresos_estudios(
-    dataset_renta_limpio: pd.DataFrame,
-    dataset_estudios_limpio: pd.DataFrame
-):
-    """
-    Crea un gráfico de tendencia mostrando evolución de ingresos totales por período,
-    superpuesto con indicador de estudiantes en educación superior por año.
-    Combina datos de rentas con datos de estudios independientes.
-    """
-    # Preparar datos de ingresos por año
-    df_ingresos = dataset_renta_limpio[dataset_renta_limpio['ISLA'].notna()].copy()
-    df_ing_año = df_ingresos.groupby('TIME_PERIOD#es')['OBS_VALUE'].sum().reset_index()
-    df_ing_año.columns = ['Año', 'Ingresos_Total']
-    
-    # Preparar datos de estudiantes en educación superior por año
-    df_estudios = dataset_estudios_limpio.copy()
-    df_sup_año = df_estudios[
-        df_estudios['Nivel de estudios en curso'] == 'Educación superior'
-    ].groupby('Año')['Total'].sum().reset_index()
-    df_sup_año.columns = ['Año', 'Estudiantes_Superior']
-    
-    # Merge
-    df_combinado = df_ing_año.merge(df_sup_año, on='Año', how='left')
-    
-    grafico = (
-        ggplot(df_combinado, aes(x='Año', y='Ingresos_Total')) +
-        geom_line(color='#1f77b4', size=1.2) +
-        geom_point(color='#1f77b4', size=3) +
-        labs(
-            title='Tendencia: Ingresos Totales vs Estudiantes en Educación Superior',
-            x='Año',
-            y='Ingresos Totales',
-            caption='Fuente: Datos integrados de Rentas y Nivel de Estudios'
-        ) +
-        theme_minimal() +
-        theme(
-            figure_size=(12, 6),
-            plot_title=element_text(size=14, weight='bold'),
-            axis_title_x=element_text(size=11),
-            axis_title_y=element_text(size=11),
-        )
-    )
-    
-    return grafico
-
-
 # CAPA 4: Guardar Resultados
 
-@asset
-def guardar_graficos_dinamicos(generar_graficos_por_medida):
-    """
-    Guarda cada gráfico dinámico generado en archivos PNG.
-    Este asset depende de los gráficos generados dinámicamente.
-    """
-    output_dir = Path(__file__).parent / "graficos_salida_pipeline"
-    output_dir.mkdir(exist_ok=True)
+# @asset
+# def guardar_graficos_dinamicos(generar_graficos_por_medida):
+#     """
+#     Guarda cada gráfico dinámico generado en archivos PNG.
+#     Este asset depende de los gráficos generados dinámicamente.
+#     """
+#     output_dir = Path(__file__).parent / "graficos_salida_pipeline"
+#     output_dir.mkdir(exist_ok=True)
     
-    rutas_guardadas = []
+#     rutas_guardadas = []
     
-    for grafico_data in generar_graficos_por_medida:
-        try:
-            ruta_archivo = output_dir / f"grafico_{grafico_data['nombre_archivo']}.png"
-            grafico_data['grafico'].save(str(ruta_archivo), dpi=300, verbose=False)
-            rutas_guardadas.append(str(ruta_archivo))
-            print(f"✅ Guardado: {ruta_archivo}")
-        except Exception as e:
-            print(f"❌ Error guardando gráfico {grafico_data['medida']}: {e}")
+#     for grafico_data in generar_graficos_por_medida:
+#         try:
+#             ruta_archivo = output_dir / f"grafico_{grafico_data['nombre_archivo']}.png"
+#             grafico_data['grafico'].save(str(ruta_archivo), dpi=300, verbose=False)
+#             rutas_guardadas.append(str(ruta_archivo))
+#             print(f"✅ Guardado: {ruta_archivo}")
+#         except Exception as e:
+#             print(f"❌ Error guardando gráfico {grafico_data['medida']}: {e}")
     
-    print(f"\n Gráficos dinámicos guardados en: {output_dir}")
+#     print(f"\n Gráficos dinámicos guardados en: {output_dir}")
     
-    return rutas_guardadas
+#     return rutas_guardadas
 
 @asset
 def guardar_graficos_resumen(
     grafico_distribucion_ingressos, 
     grafico_tendencia_total, 
     grafico_ingresos_por_isla,
-    grafico_nivel_estudios_distribucion,
-    grafico_tendencia_ingresos_estudios
+    grafico_nivel_estudios_distribucion
 ):
     """
     Guarda todos los gráficos de resumen generados en PNG.
@@ -615,11 +566,6 @@ def guardar_graficos_resumen(
     ruta_nivel_dist = output_dir / "04_nivel_estudios_distribucion.png"
     grafico_nivel_estudios_distribucion.save(str(ruta_nivel_dist), dpi=300, verbose=False)
     print(f"✅ Guardado: {ruta_nivel_dist}")
- 
-    # Guardar gráfico de tendencia integrada
-    ruta_tendencia_est = output_dir / "06_tendencia_ingresos_estudios.png"
-    grafico_tendencia_ingresos_estudios.save(str(ruta_tendencia_est), dpi=300, verbose=False)
-    print(f"✅ Guardado: {ruta_tendencia_est}")
     
     print(f"\n📊 Gráficos de resumen guardados en: {output_dir}")
     
@@ -627,6 +573,5 @@ def guardar_graficos_resumen(
         'distribucion': str(ruta_distribucion),
         'tendencia': str(ruta_tendencia),
         'ingresos_por_isla': str(ruta_islas),
-        'nivel_estudios': str(ruta_nivel_dist),
-        'tendencia_integrada': str(ruta_tendencia_est)
+        'nivel_estudios': str(ruta_nivel_dist)
     }
