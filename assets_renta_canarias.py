@@ -6,13 +6,11 @@ y niveles de estudios desde nivelestudios.xlsx para enriquecer las visualizacion
 """
 
 import pandas as pd
-import os
 from pathlib import Path
 from dagster import asset
 from plotnine import (
     ggplot, aes, geom_bar, geom_line, geom_point, 
-    scale_x_continuous, scale_y_continuous,
-    theme_minimal, labs, theme, element_text, facet_wrap, geom_tile
+    theme_minimal, labs, theme, element_text
 )
 
 # CAPA 1: Extracción de Datos

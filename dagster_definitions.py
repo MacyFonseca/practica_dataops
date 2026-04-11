@@ -6,11 +6,19 @@ Alterna a usar dagster dev -f assets_renta_canarias.py desde la terminal.
 from dagster import Definitions, define_asset_job, in_process_executor
 from assets_renta_canarias import (
     cargar_dataset_renta,
+    cargar_codigos_municipios,
+    cargar_nivel_estudios,
+    dataset_renta_con_municipios,
+    dataset_renta_con_estudios,
+    dataset_estudios_limpio,
     dataset_renta_limpio,
     grafico_distribucion_ingressos,
     grafico_tendencia_total,
-    guardar_graficos_resumen
+    grafico_ingresos_por_isla,
+    grafico_nivel_estudios_distribucion,
+    guardar_graficos_resumen,
 )
+from checks_pipeline import all_checks
 
 
 # Definir el job que ejecuta todos los assets en orden
@@ -30,11 +38,19 @@ renta_canarias_job = define_asset_job(
 defs = Definitions(
     assets=[
         cargar_dataset_renta,
+        cargar_codigos_municipios,
+        cargar_nivel_estudios,
+        dataset_renta_con_municipios,
+        dataset_renta_con_estudios,
+        dataset_estudios_limpio,
         dataset_renta_limpio,
         grafico_distribucion_ingressos,
         grafico_tendencia_total,
-        guardar_graficos_resumen
+        grafico_ingresos_por_isla,
+        grafico_nivel_estudios_distribucion,
+        guardar_graficos_resumen,
     ],
+    asset_checks=all_checks,
     jobs=[renta_canarias_job],
 )
 
