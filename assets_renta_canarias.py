@@ -509,3 +509,91 @@ def guardar_graficos_resumen(
         'ingresos_por_isla': str(ruta_islas),
         'nivel_estudios': str(ruta_nivel_dist)
     }
+
+
+# CAPA IA: Generación de gráficos con LLM
+
+@asset
+def islas_raw(dataset_renta_limpio: pd.DataFrame) -> pd.DataFrame:
+    """
+    Agrega el dataset de renta limpio por isla y año, calculando el valor medio de OBS_VALUE.
+    Produce un DataFrame con columnas ['isla', 'año', 'valor'] para uso en el pipeline de IA.
+    """
+    df = dataset_renta_limpio.copy()
+
+    df_islas = (
+        df.groupby(['ISLA_FINAL', 'TIME_PERIOD#es'])['OBS_VALUE']
+        .mean()
+        .reset_index()
+    )
+
+    df_islas = df_islas.rename(columns={
+        'ISLA_FINAL': 'isla',
+        'TIME_PERIOD#es': 'año',
+        'OBS_VALUE': 'valor',
+    })
+
+    print(f"\n Dataset islas_raw: {df_islas.shape[0]} registros")
+    print(f"Islas: {sorted(df_islas['isla'].unique())}")
+    print(f"Años: {sorted(df_islas['año'].unique())}")
+
+    return df_islas
+
+
+@asset
+def template_ia(islas_raw: pd.DataFrame) -> dict:
+    """
+    Construye el prompt para un LLM siguiendo la gramática de gráficos de Wickham.
+    El prompt describe un gráfico de líneas del valor de renta por isla y año,
+    destacando Tenerife en naranja y el resto en gris claro mediante scale_color_manual.
+    Devuelve un diccionario con el modelo y los mensajes de sistema y usuario.
+    """
+    # Construir color_map dinámicamente: todas las islas en gris, Tenerife en naranja
+    islas = sorted(islas_raw['isla'].dropna().unique())
+    color_map = {isla: '#D3D3D3' for isla in islas}
+    color_map['Tenerife'] = '#FF8C00'
+
+    color_map_str = repr(color_map)
+
+    system_message = (
+        "Eres un experto en visualización de datos con Python y la librería plotnine. "
+        "Tu única tarea es generar código Python ejecutable. "
+        "Responde ÚNICAMENTE con código Python puro. "
+        "No incluyas bloques de markdown (``` o similares), no incluyas texto explicativo "
+        "ni descripciones fuera del código. "
+        "El código debe poder ejecutarse directamente sin ninguna modificación."
+    )
+
+    user_message = (
+        "Genera código Python con plotnine que produzca el siguiente gráfico "
+        "siguiendo la gramática de gráficos de Wickham:\n\n"
+        "DATOS:\n"
+        "  - DataFrame llamado `df` con las columnas:\n"
+        "      * `isla`  (str)   — nombre de la isla\n"
+        "      * `año`   (int)   — año de la observación\n"
+        "      * `valor` (float) — valor medio de renta (€)\n\n"
+        "ESTÉTICAS (aes):\n"
+        "  - Eje X → `año`\n"
+        "  - Eje Y → `valor`\n"
+        "  - Color → `isla`\n\n"
+        "GEOMETRÍA:\n"
+        "  - geom_line()\n\n"
+        "ESCALA DE COLOR:\n"
+        f"  - scale_color_manual con el siguiente diccionario de valores: {color_map_str}\n"
+        "  - Esto resalta Tenerife en naranja (#FF8C00) y deja el resto en gris claro (#D3D3D3)\n\n"
+        "TEMA:\n"
+        "  - theme_minimal()\n\n"
+        "ETIQUETAS:\n"
+        "  - Título: 'Distribución de Renta por Isla - Canarias'\n"
+        "  - Eje X: 'Año'\n"
+        "  - Eje Y: 'Valor (€)'\n\n"
+        "Importa las funciones necesarias de plotnine y asigna el gráfico a una variable llamada `grafico`."
+    )
+
+    return {
+        'model': 'ollama/llama3.1:8b',
+        'messages': [
+            {'role': 'system', 'content': system_message},
+            {'role': 'user',   'content': user_message},
+        ],
+    }
