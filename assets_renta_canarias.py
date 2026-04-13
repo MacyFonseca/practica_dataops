@@ -632,6 +632,43 @@ def codigo_limpio_ia(codigo_generado_ia: str) -> str:
 
     codigo = codigo.strip()
 
+    # Normalizar comillas tipográficas (‘’“”) a comillas ASCII estándar
+    # Los LLMs las generan habitualmente y causan SyntaxError en Python
+    TABLA_COMILLAS = str.maketrans({
+        '\u2018': "'",  # LEFT SINGLE QUOTATION MARK
+        '\u2019': "'",  # RIGHT SINGLE QUOTATION MARK
+        '\u201c': '"',  # LEFT DOUBLE QUOTATION MARK
+        '\u201d': '"',  # RIGHT DOUBLE QUOTATION MARK
+        '\u2032': "'",  # PRIME
+        '\u2033': '"',  # DOUBLE PRIME
+    })
+    codigo_normalizado = codigo.translate(TABLA_COMILLAS)
+    if codigo_normalizado != codigo:
+        print(" Comillas tipográficas normalizadas a ASCII")
+    codigo = codigo_normalizado
+    # Eliminar imports con wildcard (from X import *) — no están permitidos dentro
+    # de una función y son redundantes porque el entorno ya tiene todos los símbolos
+    lineas_filtradas = [
+        linea for linea in codigo.splitlines()
+        if not re.match(r'^\s*from\s+\S+\s+import\s+\*', linea)
+    ]
+    n_eliminadas = len(codigo.splitlines()) - len(lineas_filtradas)
+    if n_eliminadas:
+        print(f" {n_eliminadas} línea(s) 'import *' eliminadas")
+    codigo = "\n".join(lineas_filtradas)
+
+    # Validar sintaxis antes de envolver — reportar el código problemático claramente
+    try:
+        compile(codigo, '<codigo_ia>', 'exec')
+    except SyntaxError as e:
+        lineas = codigo.splitlines()
+        contexto = lineas[max(0, e.lineno - 3): e.lineno + 2] if e.lineno else lineas
+        raise ValueError(
+            f"El código generado por la IA tiene un error de sintaxis: {e}\n"
+            f"Contexto (líneas {max(1, (e.lineno or 1) - 2)}-{(e.lineno or 0) + 2}):\n"
+            + "\n".join(f"  {l}" for l in contexto)
+        ) from e
+
     # Envolver en función generar_plot(df) indentando cada línea
     lineas_indentadas = "\n".join("    " + linea for linea in codigo.splitlines())
     codigo_envuelto = f"def generar_plot(df):\n{lineas_indentadas}\n    return grafico"
@@ -651,6 +688,7 @@ def visualizacion_png(codigo_limpio_ia: str, islas_raw: pd.DataFrame) -> Output:
     for nombre in dir(plotnine):
         entorno_ejecucion[nombre] = getattr(plotnine, nombre)
     entorno_ejecucion['pd'] = pd
+    entorno_ejecucion['p9'] = plotnine  # alias usado habitualmente por los LLMs
 
     # Ejecutar el código generado por la IA
     exec(codigo_limpio_ia, entorno_ejecucion)  # nosec B102

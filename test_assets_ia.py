@@ -92,6 +92,33 @@ class TestCodigoLimpioIa:
                 assert linea.startswith("    "), \
                     f"La línea debería estar indentada 4 espacios: {repr(linea)}"
 
+    def test_elimina_wildcard_import(self):
+        """Líneas 'from X import *' deben ser eliminadas para evitar SyntaxError en exec()."""
+        codigo_con_wildcard = (
+            "from plotnine import *\n"
+            "from pandas import *\n"
+            + _CODIGO_PLOTNINE_VALIDO
+        )
+        resultado = codigo_limpio_ia(codigo_con_wildcard)
+        assert "import *" not in resultado, \
+            "El resultado no debe contener 'import *'"
+        assert "def generar_plot(df):" in resultado
+
+    def test_normaliza_comillas_tipograficas(self):
+        """Comillas tipográficas (\u2018\u2019\u201c\u201d) deben convertirse a ASCII para evitar SyntaxError."""
+        codigo_con_curly = _CODIGO_PLOTNINE_VALIDO.replace("'isla'", "\u2018isla\u2019").replace("'año'", "\u2018año\u2019")
+        resultado = codigo_limpio_ia(codigo_con_curly)
+        assert '\u2018' not in resultado and '\u2019' not in resultado, \
+            "El resultado no debe contener comillas tipográficas simples"
+        assert "def generar_plot(df):" in resultado
+
+    def test_codigo_con_sintaxis_invalida_lanza_valueerror(self):
+        """Código con SyntaxError irreparable debe lanzar ValueError con contexto claro."""
+        codigo_invalido = "def foo(\ngrafico = ggplot()\n"
+        import pytest
+        with pytest.raises(ValueError, match="error de sintaxis"):
+            codigo_limpio_ia(codigo_invalido)
+
 
 # ===========================================================================
 # Tests de visualizacion_png
