@@ -19,6 +19,9 @@ from assets_renta_canarias import (
     guardar_graficos_resumen,
     islas_raw,
     template_ia,
+    codigo_generado_ia,
+    codigo_limpio_ia,
+    visualizacion_png,
 )
 from checks_pipeline import all_checks
 
@@ -53,6 +56,9 @@ defs = Definitions(
         guardar_graficos_resumen,
         islas_raw,
         template_ia,
+        codigo_generado_ia,
+        codigo_limpio_ia,
+        visualizacion_png,
     ],
     asset_checks=all_checks,
     jobs=[renta_canarias_job],

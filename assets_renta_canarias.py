@@ -5,13 +5,16 @@ Integra información de municipios desde codislas.csv
 y niveles de estudios desde nivelestudios.xlsx para enriquecer las visualizaciones.
 """
 
+import re
 import pandas as pd
+import plotnine
 from pathlib import Path
-from dagster import asset
+from dagster import asset, Output, MetadataValue
 from plotnine import (
-    ggplot, aes, geom_bar, geom_line, geom_point, 
+    ggplot, aes, geom_bar, geom_line, geom_point,
     theme_minimal, labs, theme, element_text
 )
+import litellm
 
 # CAPA 1: Extracción de Datos
 
@@ -597,3 +600,75 @@ def template_ia(islas_raw: pd.DataFrame) -> dict:
             {'role': 'user',   'content': user_message},
         ],
     }
+
+@asset
+def codigo_generado_ia(template_ia: dict) -> str:
+    """
+    Envía el prompt construido por template_ia al LLM mediante litellm.
+    Devuelve el contenido de la respuesta como string sin procesar.
+    """
+    response = litellm.completion(
+        model=template_ia['model'],
+        messages=template_ia['messages'],
+    )
+    codigo = response.choices[0].message.content
+    print(f"\n Respuesta recibida del LLM ({len(codigo)} caracteres)")
+    return codigo
+
+@asset
+def codigo_limpio_ia(codigo_generado_ia: str) -> str:
+    """
+    Limpia la respuesta del LLM eliminando bloques de markdown si los hay.
+    Envuelve el código en una función generar_plot(df) para su posterior ejecución.
+    El código resultante puede ejecutarse directamente con exec().
+    """
+    codigo = codigo_generado_ia
+
+    # Extraer código de bloque markdown si existe (```python...``` o ```...```)
+    match = re.search(r'```(?:python)?\n?(.*?)```', codigo, re.DOTALL)
+    if match:
+        codigo = match.group(1)
+        print(" Bloque markdown detectado y extraído")
+
+    codigo = codigo.strip()
+
+    # Envolver en función generar_plot(df) indentando cada línea
+    lineas_indentadas = "\n".join("    " + linea for linea in codigo.splitlines())
+    codigo_envuelto = f"def generar_plot(df):\n{lineas_indentadas}\n    return grafico"
+
+    print(f" Código limpio listo ({len(codigo_envuelto)} caracteres)")
+    return codigo_envuelto
+
+@asset
+def visualizacion_png(codigo_limpio_ia: str, islas_raw: pd.DataFrame) -> Output:
+    """
+    Ejecuta el código Python generado por la IA en un entorno controlado.
+    Llama a generar_plot(islas_raw) para obtener el gráfico y lo guarda como PNG.
+    Devuelve un Output de Dagster con la ruta del archivo generado como metadato.
+    """
+    # Preparar entorno de ejecución con plotnine y pandas disponibles
+    entorno_ejecucion = globals().copy()
+    for nombre in dir(plotnine):
+        entorno_ejecucion[nombre] = getattr(plotnine, nombre)
+    entorno_ejecucion['pd'] = pd
+
+    # Ejecutar el código generado por la IA
+    exec(codigo_limpio_ia, entorno_ejecucion)  # nosec B102
+
+    # Llamar a la función generada
+    grafico = entorno_ejecucion['generar_plot'](islas_raw)
+
+    # Guardar el gráfico como PNG
+    output_dir = Path(__file__).parent / "graficos_salida_pipeline"
+    output_dir.mkdir(exist_ok=True)
+    ruta = output_dir / "visualizacion_ia.png"
+    grafico.save(str(ruta), dpi=300, verbose=False)
+
+    print(f"\n Gráfico IA guardado en: {ruta}")
+
+    return Output(
+        value=str(ruta),
+        metadata={
+            'ruta': MetadataValue.path(str(ruta)),
+        },
+    )
