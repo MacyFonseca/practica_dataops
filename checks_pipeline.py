@@ -1,9 +1,10 @@
 """
 Checks de calidad de datos para el pipeline de distribución de rentas en Canarias.
-Organizados en tres capas:
+Organizados en cuatro capas:
   - Capa 1: Extracción  — validaciones sobre los datos cargados desde ficheros
   - Capa 2: Transformación — validaciones sobre los datasets enriquecidos y limpios
   - Capa 3: Visualización — validaciones previas a la generación de gráficos
+  - Capa 4: IA — validaciones sobre los assets del pipeline de IA generativa
 """
 
 import pandas as pd
@@ -355,6 +356,172 @@ def check_datos_grafico_estudios(dataset_estudios_limpio: pd.DataFrame) -> Asset
 
 
 # ===========================================================================
+# CAPA 4: IA
+# ===========================================================================
+
+# --- islas_raw ---
+
+@asset_check(asset="islas_raw", description="Comprueba que las columnas obligatorias ['isla', 'año', 'valor'] están presentes")
+def check_schema_islas_raw(islas_raw: pd.DataFrame) -> AssetCheckResult:
+    columnas_esperadas = {'isla', 'año', 'valor'}
+    faltantes = columnas_esperadas - set(islas_raw.columns)
+    passed = len(faltantes) == 0
+    return AssetCheckResult(
+        passed=passed,
+        severity=AssetCheckSeverity.ERROR,
+        metadata={
+            "columnas_faltantes": str(sorted(faltantes)) if faltantes else "ninguna",
+        },
+    )
+
+
+@asset_check(asset="islas_raw", description="Comprueba que el DataFrame de islas no está vacío")
+def check_no_vacio_islas_raw(islas_raw: pd.DataFrame) -> AssetCheckResult:
+    n_filas = len(islas_raw)
+    passed = n_filas > 0
+    return AssetCheckResult(
+        passed=passed,
+        severity=AssetCheckSeverity.ERROR,
+        metadata={"n_filas": n_filas},
+    )
+
+
+@asset_check(asset="islas_raw", description="Comprueba que las 7 islas canarias están representadas")
+def check_islas_canarias_raw(islas_raw: pd.DataFrame) -> AssetCheckResult:
+    islas_esperadas = {
+        'Tenerife', 'Gran Canaria', 'La Palma',
+        'La Gomera', 'El Hierro', 'Lanzarote', 'Fuerteventura'
+    }
+    islas_presentes = set(islas_raw['isla'].dropna().unique())
+    faltantes = islas_esperadas - islas_presentes
+    passed = len(faltantes) == 0
+    return AssetCheckResult(
+        passed=passed,
+        severity=AssetCheckSeverity.WARN,
+        metadata={
+            "islas_faltantes": str(sorted(faltantes)) if faltantes else "ninguna",
+            "islas_presentes": str(sorted(islas_presentes)),
+        },
+    )
+
+
+@asset_check(asset="islas_raw", description="Comprueba que todos los valores de renta son positivos")
+def check_valores_positivos_islas_raw(islas_raw: pd.DataFrame) -> AssetCheckResult:
+    negativos = (islas_raw['valor'] <= 0).sum()
+    passed = int(negativos) == 0
+    return AssetCheckResult(
+        passed=passed,
+        severity=AssetCheckSeverity.WARN,
+        metadata={"valores_no_positivos": int(negativos)},
+    )
+
+
+# --- template_ia ---
+
+@asset_check(asset="template_ia", description="Comprueba que el diccionario tiene la clave 'model' con valor no vacío")
+def check_template_tiene_modelo(template_ia: dict) -> AssetCheckResult:
+    modelo = template_ia.get('model', '')
+    passed = bool(modelo)
+    return AssetCheckResult(
+        passed=passed,
+        severity=AssetCheckSeverity.ERROR,
+        metadata={"model": modelo or "(vacío)"},
+    )
+
+
+@asset_check(asset="template_ia", description="Comprueba que 'messages' contiene roles 'system' y 'user'")
+def check_template_tiene_mensajes(template_ia: dict) -> AssetCheckResult:
+    mensajes = template_ia.get('messages', [])
+    roles_presentes = {m.get('role') for m in mensajes}
+    roles_faltantes = {'system', 'user'} - roles_presentes
+    passed = len(roles_faltantes) == 0
+    return AssetCheckResult(
+        passed=passed,
+        severity=AssetCheckSeverity.ERROR,
+        metadata={
+            "roles_faltantes": str(sorted(roles_faltantes)) if roles_faltantes else "ninguno",
+            "n_mensajes": len(mensajes),
+        },
+    )
+
+
+@asset_check(asset="template_ia", description="Comprueba que el user message menciona las variables isla, año y valor")
+def check_template_menciona_variables(template_ia: dict) -> AssetCheckResult:
+    mensajes = template_ia.get('messages', [])
+    user_content = next(
+        (m.get('content', '') for m in mensajes if m.get('role') == 'user'), ''
+    )
+    variables_esperadas = ['isla', 'año', 'valor']
+    faltantes = [v for v in variables_esperadas if v not in user_content]
+    passed = len(faltantes) == 0
+    return AssetCheckResult(
+        passed=passed,
+        severity=AssetCheckSeverity.WARN,
+        metadata={
+            "variables_faltantes": str(faltantes) if faltantes else "ninguna",
+        },
+    )
+
+
+# --- codigo_generado_ia ---
+
+@asset_check(asset="codigo_generado_ia", description="Comprueba que la respuesta del LLM no es un string vacío")
+def check_respuesta_no_vacia(codigo_generado_ia: str) -> AssetCheckResult:
+    passed = bool(codigo_generado_ia and codigo_generado_ia.strip())
+    return AssetCheckResult(
+        passed=passed,
+        severity=AssetCheckSeverity.ERROR,
+        metadata={"longitud": len(codigo_generado_ia) if codigo_generado_ia else 0},
+    )
+
+
+@asset_check(asset="codigo_generado_ia", description="Comprueba que la respuesta contiene palabras clave Python esperadas")
+def check_respuesta_contiene_python(codigo_generado_ia: str) -> AssetCheckResult:
+    palabras_clave = ['import', 'ggplot', 'grafico']
+    faltantes = [p for p in palabras_clave if p not in codigo_generado_ia]
+    passed = len(faltantes) == 0
+    return AssetCheckResult(
+        passed=passed,
+        severity=AssetCheckSeverity.WARN,
+        metadata={
+            "palabras_clave_faltantes": str(faltantes) if faltantes else "ninguna",
+        },
+    )
+
+
+# --- codigo_limpio_ia ---
+
+@asset_check(asset="codigo_limpio_ia", description="Comprueba que el código limpio contiene la función generar_plot(df)")
+def check_limpio_tiene_funcion(codigo_limpio_ia: str) -> AssetCheckResult:
+    passed = 'def generar_plot(df):' in codigo_limpio_ia
+    return AssetCheckResult(
+        passed=passed,
+        severity=AssetCheckSeverity.ERROR,
+        metadata={"contiene_funcion": passed},
+    )
+
+
+@asset_check(asset="codigo_limpio_ia", description="Comprueba que no quedan delimitadores de markdown en el código")
+def check_limpio_sin_markdown(codigo_limpio_ia: str) -> AssetCheckResult:
+    passed = '```' not in codigo_limpio_ia
+    return AssetCheckResult(
+        passed=passed,
+        severity=AssetCheckSeverity.ERROR,
+        metadata={"contiene_markdown": not passed},
+    )
+
+
+@asset_check(asset="codigo_limpio_ia", description="Comprueba que el código termina con 'return grafico'")
+def check_limpio_tiene_return(codigo_limpio_ia: str) -> AssetCheckResult:
+    passed = 'return grafico' in codigo_limpio_ia
+    return AssetCheckResult(
+        passed=passed,
+        severity=AssetCheckSeverity.ERROR,
+        metadata={"contiene_return_grafico": passed},
+    )
+
+
+# ===========================================================================
 # Lista exportada para registrar en Definitions
 # ===========================================================================
 
@@ -381,4 +548,17 @@ all_checks = [
     check_datos_grafico_tendencia,
     check_datos_grafico_islas,
     check_datos_grafico_estudios,
+    # Capa 4 — IA
+    check_schema_islas_raw,
+    check_no_vacio_islas_raw,
+    check_islas_canarias_raw,
+    check_valores_positivos_islas_raw,
+    check_template_tiene_modelo,
+    check_template_tiene_mensajes,
+    check_template_menciona_variables,
+    check_respuesta_no_vacia,
+    check_respuesta_contiene_python,
+    check_limpio_tiene_funcion,
+    check_limpio_sin_markdown,
+    check_limpio_tiene_return,
 ]
