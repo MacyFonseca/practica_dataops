@@ -6,8 +6,12 @@ y niveles de estudios desde nivelestudios.xlsx para enriquecer las visualizacion
 """
 
 import re
+import shutil
+import subprocess
+import tempfile
 import pandas as pd
 import plotnine
+from datetime import datetime
 from pathlib import Path
 from dagster import asset, Output, MetadataValue, AssetExecutionContext
 from plotnine import (
@@ -685,10 +689,11 @@ def codigo_limpio_ia(context: AssetExecutionContext, codigo_generado_ia: str) ->
         codigo = codigo.replace('gráfico', 'grafico')
         print(" Variable 'gráfico' renombrada a 'grafico' (sin tilde)")
 
-    # Eliminar líneas que crean DataFrames desde cero (pd.DataFrame, pd.read_csv, etc.)
-    # El LLM a veces genera datos de ejemplo ignorando que `df` ya viene dado
+    # Eliminar cualquier línea que reasigne `df` desde cero (pd.DataFrame, pd.read_csv,
+    # literales Ellipsis `...`, dicts, listas, etc.) ignorando solo las transformaciones
+    # legítimas sobre el propio df, como `df = df[condicion]` o `df = df.copy()`.
     PATRON_CREACION_DF = re.compile(
-        r'^\s*(df\s*=\s*(pd\.DataFrame|pd\.read_csv|pd\.read_excel)\s*\()',
+        r'^\s*df\s*=\s*(?!df\b)',
         re.IGNORECASE,
     )
     lineas_sin_df = [l for l in codigo.splitlines() if not PATRON_CREACION_DF.match(l)]
@@ -787,5 +792,104 @@ def visualizacion_png(codigo_limpio_ia: str, islas_raw: pd.DataFrame) -> Output:
         value=str(ruta),
         metadata={
             'ruta': MetadataValue.path(str(ruta)),
+        },
+    )
+
+
+# CAPA 5: Publicación en GitHub Pages
+
+@asset
+def publicar_en_ghpages(context: AssetExecutionContext, visualizacion_png: str) -> Output:
+    """
+    Sube visualizacion_ia.png a la rama gh-pages del repositorio.
+    Genera un index.html mínimo que muestra el gráfico y lo publica en GitHub Pages.
+    Si el push falla, emite un warning sin interrumpir el pipeline.
+    URL pública: https://MacyFonseca.github.io/practica_dataops/
+    """
+    REPO_ROOT = Path(__file__).parent
+    GHPAGES_URL = "https://MacyFonseca.github.io/practica_dataops/"
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    def _run(cmd: list, cwd: str) -> None:
+        subprocess.run(cmd, cwd=cwd, check=True, capture_output=True, text=True)  # nosec B603
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        try:
+            # Comprobar si la rama gh-pages ya existe en el remoto
+            result = subprocess.run(
+                ["git", "ls-remote", "--exit-code", "--heads", "origin", "gh-pages"],
+                cwd=str(REPO_ROOT),
+                capture_output=True,
+            )
+            rama_existe = result.returncode == 0
+
+            if rama_existe:
+                _run(["git", "worktree", "add", tmpdir, "gh-pages"], cwd=str(REPO_ROOT))
+            else:
+                # Crear rama orphan la primera vez
+                _run(
+                    ["git", "worktree", "add", "--orphan", "-b", "gh-pages", tmpdir],
+                    cwd=str(REPO_ROOT),
+                )
+
+            # Copiar solo visualizacion_ia.png al worktree
+            shutil.copy(visualizacion_png, str(Path(tmpdir) / "visualizacion_ia.png"))
+
+            # Generar index.html mínimo
+            html = f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Distribución de Renta por Isla - Canarias</title>
+  <style>
+    body {{ font-family: sans-serif; max-width: 960px; margin: 40px auto; padding: 0 20px; background: #f8f9fa; }}
+    h1 {{ color: #333; }}
+    img {{ max-width: 100%; border: 1px solid #ddd; border-radius: 4px; }}
+    p.ts {{ color: #888; font-size: 0.85em; margin-top: 8px; }}
+  </style>
+</head>
+<body>
+  <h1>Distribución de Renta por Isla — Canarias</h1>
+  <p>Gráfico generado automáticamente por el pipeline DataOps con IA (Dagster + LLM).</p>
+  <img src="visualizacion_ia.png" alt="Distribución de Renta por Isla - Canarias">
+  <p class="ts">Última actualización: {timestamp}</p>
+</body>
+</html>
+"""
+            (Path(tmpdir) / "index.html").write_text(html, encoding="utf-8")
+
+            # Configurar identidad git mínima en el worktree si no hay una global
+            _run(["git", "add", "visualizacion_ia.png", "index.html"], cwd=tmpdir)
+            _run(
+                ["git", "commit", "-m", f"chore: actualizar gráfico IA [{timestamp}]"],
+                cwd=tmpdir,
+            )
+            _run(["git", "push", "origin", "gh-pages"], cwd=tmpdir)
+
+            context.log.info(f"[publicar_en_ghpages] Gráfico publicado en {GHPAGES_URL}")
+            print(f"\n✅ Gráfico publicado en: {GHPAGES_URL}")
+
+        except subprocess.CalledProcessError as e:
+            msg = (
+                f"[publicar_en_ghpages] El push a gh-pages falló: "
+                f"{e.stderr or e.stdout or str(e)}"
+            )
+            context.log.warning(msg)
+            print(f"\n⚠️  {msg}")
+        finally:
+            # Limpiar el worktree aunque haya fallado el push
+            subprocess.run(
+                ["git", "worktree", "remove", "--force", tmpdir],
+                cwd=str(REPO_ROOT),
+                capture_output=True,
+            )
+
+    return Output(
+        value=GHPAGES_URL,
+        metadata={
+            "url": MetadataValue.url(GHPAGES_URL),
+            "imagen": MetadataValue.path(visualizacion_png),
+            "timestamp": MetadataValue.text(timestamp),
         },
     )

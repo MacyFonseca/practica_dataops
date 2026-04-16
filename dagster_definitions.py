@@ -22,6 +22,7 @@ from assets_renta_canarias import (
     codigo_generado_ia,
     codigo_limpio_ia,
     visualizacion_png,
+    publicar_en_ghpages,
 )
 from checks_pipeline import all_checks
 
@@ -59,6 +60,7 @@ defs = Definitions(
         codigo_generado_ia,
         codigo_limpio_ia,
         visualizacion_png,
+        publicar_en_ghpages,
     ],
     asset_checks=all_checks,
     jobs=[renta_canarias_job],
