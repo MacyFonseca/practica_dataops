@@ -9,7 +9,7 @@ import re
 import pandas as pd
 import plotnine
 from pathlib import Path
-from dagster import asset, Output, MetadataValue
+from dagster import asset, Output, MetadataValue, AssetExecutionContext
 from plotnine import (
     ggplot, aes, geom_bar, geom_line, geom_point,
     theme_minimal, labs, theme, element_text
@@ -25,17 +25,17 @@ def cargar_dataset_renta() -> pd.DataFrame:
     El dataset contiene información de ingresos por municipio, isla, año y tipo de ingreso.
     Normaliza los nombres de columnas para facilitar su uso en etapas posteriores."""
     csv_path = Path(__file__).parent / "distribucion-renta-canarias.csv"
-    
+
     df = pd.read_csv(csv_path)
-    
+
     # Normalizar nombres de columnas
     df.columns = df.columns.str.strip()
-    
+
     # Mostrar información del dataset
     print(f"\n Dataset cargado: {df.shape[0]} registros, {df.shape[1]} columnas")
     print(f"Años disponibles: {sorted(df['TIME_PERIOD#es'].unique())}")
     print(f"Medidas disponibles: {df['MEDIDAS#es'].unique().tolist()}")
-    
+
     return df
 
 
@@ -47,12 +47,12 @@ def cargar_codigos_municipios() -> pd.DataFrame:
     Normaliza dinámicamente formato de nombres invertidos (ej: "Palma, La" → "La Palma").
     """
     csv_path = Path(__file__).parent / "codislas.csv"
-    
+
     df = pd.read_csv(csv_path, sep=';', encoding='latin-1')
-    
+
     # Normalizar nombres de columnas
     df.columns = df.columns.str.strip()
-    
+
     # Función genérica para normalizar nombres invertidos
     # Invierte formato "Nombre, Artículo" (ej: "Palma, La") a "Artículo Nombre" (ej: "La Palma")
     def normalizar_nombre_invertido(nombre_str):
@@ -62,16 +62,16 @@ def cargar_codigos_municipios() -> pd.DataFrame:
             if len(partes) == 2:
                 return f"{partes[1]} {partes[0]}"
         return nombre_str
-    
+
     # Aplicar normalización a nombres de municipios
     df['NOMBRE_NORMALIZADO'] = df['NOMBRE'].str.strip().apply(normalizar_nombre_invertido)
-    
+
     # Aplicar normalización a nombres de islas
     df['ISLA_NORMALIZADO'] = df['ISLA'].str.strip().apply(normalizar_nombre_invertido)
-    
+
     print(f"\n Códigos de municipios cargados: {df.shape[0]} registros")
     print(f"Islas disponibles (normalizadas): {sorted(df['ISLA_NORMALIZADO'].unique().tolist())}")
-    
+
     return df
 
 
@@ -82,9 +82,9 @@ def cargar_nivel_estudios() -> pd.DataFrame:
     Contiene datos desglosados por municipio, sexo, nacionalidad y período.
     """
     xlsx_path = Path(__file__).parent / "nivelestudios.xlsx"
-    
+
     df = pd.read_excel(xlsx_path, sheet_name=0)
-    
+
     # Normalizar nombres de columnas
     df.columns = df.columns.str.strip()
 
@@ -95,22 +95,22 @@ def cargar_nivel_estudios() -> pd.DataFrame:
             if len(partes) == 2:
                 return f"{partes[1]} {partes[0]}"
         return nombre_str
-    
+
     # Extraer código de municipio y nombre del campo 'Municipios de 500 habitantes o más'
     # Formato: "35001 Agaete" -> código: 35001, nombre: Agaete
     df[['CMUN_EST', 'MUNICIPIO_EST']] = df['Municipios de 500 habitantes o más'].str.split(' ', n=1, expand=True)
     df['CMUN_EST'] = df['CMUN_EST'].astype(int)
     df['MUNICIPIO_EST'] = df['MUNICIPIO_EST'].str.strip().apply(normalizar_nombre_invertido)
-    
+
     # Normalizar columnas para merge
     df['Periodo'] = pd.to_datetime(df['Periodo']).dt.year
     df.rename(columns={'Periodo': 'Año_Estudios'}, inplace=True)
-    
+
     print(f"\n Nivel de estudios cargado: {df.shape[0]} registros")
     print(f"Períodos: {sorted(df['Año_Estudios'].unique())}")
     print(f"Niveles de estudios: {df['Nivel de estudios en curso'].nunique()} categorías")
     print(f"Municipios: {df['MUNICIPIO_EST'].nunique()} únicos")
-    
+
     return df
 
 
@@ -127,28 +127,28 @@ def dataset_renta_con_municipios(
     """
     df_renta = cargar_dataset_renta.copy()
     df_municipios = cargar_codigos_municipios.copy()
-    
+
     # Normalizar nombres de territorio en el dataset de rentas
     df_renta['TERRITORIO#es'] = df_renta['TERRITORIO#es'].str.strip()
     df_renta['TERRITORIO_LIMPIO'] = df_renta['TERRITORIO#es'].str.strip().str.lower()
-    
+
     # Preparar dataframe para merge por municipio
     df_municipios_merge = df_municipios[['NOMBRE_NORMALIZADO', 'ISLA_NORMALIZADO', 'ISLA', 'CMUN', 'CISLA']].copy()
     df_municipios_merge['NOMBRE_LIMPIO'] = df_municipios_merge['NOMBRE_NORMALIZADO'].str.lower()
     df_municipios_merge = df_municipios_merge[['NOMBRE_LIMPIO', 'ISLA_NORMALIZADO', 'ISLA', 'CMUN', 'CISLA']].drop_duplicates(subset=['NOMBRE_LIMPIO'])
-    
+
     # Preparar dataframe para merge por isla
     df_islas_merge = df_municipios[['ISLA_NORMALIZADO', 'ISLA']].drop_duplicates()
     df_islas_merge['ISLA_LIMPIA'] = df_islas_merge['ISLA_NORMALIZADO'].str.lower()
     df_islas_merge = df_islas_merge[['ISLA_LIMPIA', 'ISLA_NORMALIZADO', 'ISLA']]
-    
+
     # Merge con municipios
     df_enriquecido = df_renta.merge(
         df_municipios_merge.rename(columns={'NOMBRE_LIMPIO': 'TERRITORIO_LIMPIO'}),
         on='TERRITORIO_LIMPIO',
         how='left'
     )
-    
+
     # Merge con islas para los registros que no encontraron municipio
     sin_isla = df_enriquecido[df_enriquecido['ISLA_NORMALIZADO'].isna()].copy()
     if len(sin_isla) > 0:
@@ -161,14 +161,14 @@ def dataset_renta_con_municipios(
         mask = sin_isla_merge['ISLA_NORMALIZADO_y'].notna()
         df_enriquecido.loc[sin_isla.index, 'ISLA_NORMALIZADO'] = sin_isla_merge.loc[mask, 'ISLA_NORMALIZADO_y']
         df_enriquecido.loc[sin_isla.index, 'ISLA'] = sin_isla_merge.loc[mask, 'ISLA_y']
-    
+
     # Usar ISLA_NORMALIZADO como columna principal, fallback a ISLA si es necesario
     df_enriquecido['ISLA_FINAL'] = df_enriquecido['ISLA_NORMALIZADO'].fillna(df_enriquecido['ISLA'])
-    
+
     print(f"\n Dataset enriquecido: {df_enriquecido.shape[0]} registros")
     print(f"Registros con información de isla: {df_enriquecido['ISLA_FINAL'].notna().sum()}")
     print(f"Islas encontradas: {sorted(df_enriquecido[df_enriquecido['ISLA_FINAL'].notna()]['ISLA_FINAL'].unique().tolist())}")
-    
+
     return df_enriquecido
 
 
@@ -185,20 +185,20 @@ def dataset_renta_con_estudios(
     """
     df_renta = dataset_renta_con_municipios.copy()
     df_estudios = cargar_nivel_estudios.copy()
-    
+
     # Obtener solo totales agregados (Sexo='Total', Nacionalidad no importa para agregado)
     df_estudios_total = df_estudios[df_estudios['Sexo'] == 'Total'].copy()
-    
+
     # Agrupar por municipio, año y nivel de estudios
     df_estudios_agg = df_estudios_total.groupby(
         ['CMUN_EST', 'MUNICIPIO_EST', 'Año_Estudios', 'Nivel de estudios en curso']
     )['Total'].sum().reset_index()
-    
+
     # Preparar nombres y columnas para merge
     df_estudios_agg['CMUN'] = df_estudios_agg['CMUN_EST']
     df_estudios_agg['TIME_PERIOD#es'] = df_estudios_agg['Año_Estudios'].astype(int)
     df_estudios_agg['Total_Estudiantes'] = df_estudios_agg['Total']
-    
+
     # Merge con datos de renta (left join para mantener todos los registros de renta)
     # Esto mantiene registros agregados incluso si no tienen correspondencia en estudios
     df_enriquecido = df_renta.merge(
@@ -206,10 +206,10 @@ def dataset_renta_con_estudios(
         on=['CMUN', 'TIME_PERIOD#es'],
         how='left'
     )
-    
+
     print(f"\n Dataset con estudios integrado: {df_enriquecido.shape[0]} registros")
     print(f"Registros con información de nivel de estudios: {df_enriquecido['Nivel de estudios en curso'].notna().sum()}")
-    
+
     return df_enriquecido
 
 
@@ -226,17 +226,17 @@ def dataset_estudios_limpio(
     """
     df_estudios = cargar_nivel_estudios.copy()
     df_municipios = cargar_codigos_municipios.copy()
-    
+
     # Obtener solo totales agregados por sexo
     df_estudios = df_estudios[df_estudios['Sexo'] == 'Total'].copy()
-    
+
     # Normalizar años
     df_estudios['Año'] = pd.to_datetime(df_estudios['Año_Estudios']).dt.year
-    
+
     # Extraer CMUN del campo 'Municipios de 500 habitantes o más'
     df_estudios[['CMUN', 'MUNICIPIO']] = df_estudios['Municipios de 500 habitantes o más'].str.split(' ', n=1, expand=True)
     df_estudios['CMUN'] = df_estudios['CMUN'].astype(int)
-    
+
     # Normalizar nombre de municipio
     def normalizar_nombre_invertido(nombre_str):
         nombre_str = nombre_str.strip()
@@ -245,22 +245,22 @@ def dataset_estudios_limpio(
             if len(partes) == 2:
                 return f"{partes[1]} {partes[0]}"
         return nombre_str
-    
+
     df_estudios['MUNICIPIO'] = df_estudios['MUNICIPIO'].str.strip().apply(normalizar_nombre_invertido)
-    
+
     # Agregar información de isla
     df_municipios_isla = df_municipios[['CMUN', 'ISLA', 'ISLA_NORMALIZADO']].copy()
     df_estudios = df_estudios.merge(df_municipios_isla, on='CMUN', how='left')
-    
+
     # Excluir categoría "Total" y Nan en nivel de estudios
     df_estudios = df_estudios[df_estudios['Nivel de estudios en curso'] != 'Total'].copy()
     df_estudios = df_estudios.dropna(subset=['Nivel de estudios en curso'])
-    
+
     print(f"\n Dataset de estudios limpio: {df_estudios.shape[0]} registros válidos")
     print(f"Años disponibles: {sorted(df_estudios['Año'].unique())}")
     print(f"Municipios: {df_estudios['MUNICIPIO'].nunique()} únicos")
     print(f"Islas: {df_estudios['ISLA_NORMALIZADO'].nunique()} islas")
-    
+
     return df_estudios
 
 
@@ -274,26 +274,26 @@ def dataset_renta_limpio(dataset_renta_con_estudios: pd.DataFrame) -> pd.DataFra
     - Utiliza datos enriquecidos con información de municipios y nivel de estudios
     """
     df = dataset_renta_con_estudios.copy()
-    
+
     # Eliminar registros con valores nulos o confidenciales
     df = df.dropna(subset=['OBS_VALUE'])
     df = df[df['CONFIDENCIALIDAD_OBSERVACION#es'].isna()]
-    
+
     # Convertir columnas a tipos apropiados
     df['OBS_VALUE'] = pd.to_numeric(df['OBS_VALUE'], errors='coerce')
     df['TIME_PERIOD#es'] = df['TIME_PERIOD#es'].astype(int)
-    
+
     # Crear etiqueta de municipio enriquecida (con isla si está disponible)
     df['MUNICIPIO_ISLA'] = df.apply(
-        lambda row: f"{row['TERRITORIO#es']} ({row['ISLA_FINAL']})" if pd.notna(row['ISLA_FINAL']) 
+        lambda row: f"{row['TERRITORIO#es']} ({row['ISLA_FINAL']})" if pd.notna(row['ISLA_FINAL'])
         else row['TERRITORIO#es'],
         axis=1
     )
-    
+
     print(f"\n Dataset limpio: {df.shape[0]} registros válidos")
     print(f"Registros con información de isla: {df['ISLA_FINAL'].notna().sum()}")
     print(f"Registros con información de nivel de estudios: {df['Nivel de estudios en curso'].notna().sum()}")
-    
+
     return df
 
 @asset
@@ -305,10 +305,10 @@ def grafico_distribucion_ingressos(dataset_renta_limpio: pd.DataFrame):
     # Filtrar el último año
     ultimo_año = dataset_renta_limpio['TIME_PERIOD#es'].max()
     df_ultimo_año = dataset_renta_limpio[dataset_renta_limpio['TIME_PERIOD#es'] == ultimo_año]
-    
+
     # Agrupar por medida y sumar
     df_agrupado = df_ultimo_año.groupby('MEDIDAS#es')['OBS_VALUE'].sum().reset_index()
-    
+
     grafico = (
         ggplot(df_agrupado, aes(x='MEDIDAS#es', y='OBS_VALUE', fill='MEDIDAS#es')) +
         geom_bar(stat='identity', show_legend=False) +
@@ -327,7 +327,7 @@ def grafico_distribucion_ingressos(dataset_renta_limpio: pd.DataFrame):
             axis_text_x=element_text(angle=45, hjust=1),
         )
     )
-    
+
     return grafico
 
 
@@ -340,7 +340,7 @@ def grafico_tendencia_total(dataset_renta_limpio: pd.DataFrame):
     # Agrupar por año y sumar los valores
     df_tendencia = dataset_renta_limpio.groupby('TIME_PERIOD#es')['OBS_VALUE'].sum().reset_index()
     df_tendencia.columns = ['Año', 'Total_Ingresos']
-    
+
     grafico = (
         ggplot(df_tendencia, aes(x='Año', y='Total_Ingresos')) +
         geom_line(color='#2ca02c', size=1.2) +
@@ -359,7 +359,7 @@ def grafico_tendencia_total(dataset_renta_limpio: pd.DataFrame):
             axis_title_y=element_text(size=11),
         )
     )
-    
+
     return grafico
 
 
@@ -371,10 +371,10 @@ def grafico_ingresos_por_isla(dataset_renta_limpio: pd.DataFrame):
     """
     # Filtrar solo los registros con información de isla
     df_islas = dataset_renta_limpio[dataset_renta_limpio['ISLA_FINAL'].notna()].copy()
-    
+
     # Agrupar por isla y medida
     df_isla_medida = df_islas.groupby(['ISLA_FINAL', 'MEDIDAS#es'])['OBS_VALUE'].sum().reset_index()
-    
+
     grafico = (
         ggplot(df_isla_medida, aes(x='ISLA_FINAL', y='OBS_VALUE', fill='MEDIDAS#es')) +
         geom_bar(stat='identity') +
@@ -395,7 +395,7 @@ def grafico_ingresos_por_isla(dataset_renta_limpio: pd.DataFrame):
             legend_position='right'
         )
     )
-    
+
     return grafico
 
 
@@ -407,10 +407,10 @@ def grafico_nivel_estudios_distribucion(dataset_estudios_limpio: pd.DataFrame):
     Utiliza datos de estudios independientes sin dependencia de rentas.
     """
     df_estudios = dataset_estudios_limpio.copy()
-    
+
     # Agrupar por nivel de estudios sumando estudiantes
     df_nivel = df_estudios.groupby('Nivel de estudios en curso')['Total'].sum().reset_index()
-    
+
     # Crear etiquetas más cortas para mejor visualización
     nivel_labels = {
         'Educación primaria e inferior': 'Primaria e inferior',
@@ -422,7 +422,7 @@ def grafico_nivel_estudios_distribucion(dataset_estudios_limpio: pd.DataFrame):
         'No cursa estudios': 'No cursa'
     }
     df_nivel['Nivel_Corto'] = df_nivel['Nivel de estudios en curso'].map(nivel_labels)
-    
+
     grafico = (
         ggplot(df_nivel, aes(x='Nivel_Corto', y='Total', fill='Nivel_Corto')) +
         geom_bar(stat='identity', show_legend=False) +
@@ -441,7 +441,7 @@ def grafico_nivel_estudios_distribucion(dataset_estudios_limpio: pd.DataFrame):
             axis_text_x=element_text(angle=45, hjust=1),
         )
     )
-    
+
     return grafico
 
 # CAPA 4: Guardar Resultados
@@ -454,9 +454,9 @@ def grafico_nivel_estudios_distribucion(dataset_estudios_limpio: pd.DataFrame):
 #     """
 #     output_dir = Path(__file__).parent / "graficos_salida_pipeline"
 #     output_dir.mkdir(exist_ok=True)
-    
+
 #     rutas_guardadas = []
-    
+
 #     for grafico_data in generar_graficos_por_medida:
 #         try:
 #             ruta_archivo = output_dir / f"grafico_{grafico_data['nombre_archivo']}.png"
@@ -465,15 +465,15 @@ def grafico_nivel_estudios_distribucion(dataset_estudios_limpio: pd.DataFrame):
 #             print(f"✅ Guardado: {ruta_archivo}")
 #         except Exception as e:
 #             print(f"❌ Error guardando gráfico {grafico_data['medida']}: {e}")
-    
+
 #     print(f"\n Gráficos dinámicos guardados en: {output_dir}")
-    
+
 #     return rutas_guardadas
 
 @asset
 def guardar_graficos_resumen(
-    grafico_distribucion_ingressos, 
-    grafico_tendencia_total, 
+    grafico_distribucion_ingressos,
+    grafico_tendencia_total,
     grafico_ingresos_por_isla,
     grafico_nivel_estudios_distribucion
 ):
@@ -483,29 +483,29 @@ def guardar_graficos_resumen(
     """
     output_dir = Path(__file__).parent / "graficos_salida_pipeline"
     output_dir.mkdir(exist_ok=True)
-    
+
     # Guardar gráfico de distribución de ingresos
     ruta_distribucion = output_dir / "01_distribucion_ingressos.png"
     grafico_distribucion_ingressos.save(str(ruta_distribucion), dpi=300, verbose=False)
     print(f"✅ Guardado: {ruta_distribucion}")
-    
+
     # Guardar gráfico de tendencia de ingresos
     ruta_tendencia = output_dir / "02_tendencia_ingressos.png"
     grafico_tendencia_total.save(str(ruta_tendencia), dpi=300, verbose=False)
     print(f"✅ Guardado: {ruta_tendencia}")
-    
+
     # Guardar gráfico de ingresos por isla
     ruta_islas = output_dir / "03_ingresos_por_isla.png"
     grafico_ingresos_por_isla.save(str(ruta_islas), dpi=300, verbose=False)
     print(f"✅ Guardado: {ruta_islas}")
-    
+
     # Guardar gráfico de distribución de nivel de estudios
     ruta_nivel_dist = output_dir / "04_nivel_estudios_distribucion.png"
     grafico_nivel_estudios_distribucion.save(str(ruta_nivel_dist), dpi=300, verbose=False)
     print(f"✅ Guardado: {ruta_nivel_dist}")
-    
+
     print(f"\n📊 Gráficos de resumen guardados en: {output_dir}")
-    
+
     return {
         'distribucion': str(ruta_distribucion),
         'tendencia': str(ruta_tendencia),
@@ -567,14 +567,23 @@ def template_ia(islas_raw: pd.DataFrame) -> dict:
         "El código debe poder ejecutarse directamente sin ninguna modificación."
     )
 
+    # Incrustar muestra real del DataFrame para que el LLM no genere sus propios datos
+    muestra_df = islas_raw.head(10).to_string(index=False)
+    islas_disponibles = sorted(islas_raw['isla'].dropna().unique().tolist())
+    años_disponibles = sorted(islas_raw['año'].dropna().unique().tolist())
+
     user_message = (
         "Genera código Python con plotnine que produzca el siguiente gráfico "
         "siguiendo la gramática de gráficos de Wickham:\n\n"
         "DATOS:\n"
-        "  - DataFrame llamado `df` con las columnas:\n"
+        "  - Dispones de un DataFrame ya cargado llamado `df` con las columnas:\n"
         "      * `isla`  (str)   — nombre de la isla\n"
         "      * `año`   (int)   — año de la observación\n"
-        "      * `valor` (float) — valor medio de renta (€)\n\n"
+        "      * `valor` (float) — valor medio de renta (€)\n"
+        "  - NO debes crear el DataFrame ni leer ningún archivo. Ya viene dado.\n"
+        f"  - Islas presentes: {islas_disponibles}\n"
+        f"  - Años presentes:  {años_disponibles}\n"
+        f"  - Muestra de los datos reales:\n{muestra_df}\n\n"
         "ESTÉTICAS (aes):\n"
         "  - Eje X → `año`\n"
         "  - Eje Y → `valor`\n"
@@ -612,15 +621,19 @@ def codigo_generado_ia(template_ia: dict) -> str:
         messages=template_ia['messages'],
     )
     codigo = response.choices[0].message.content
-    print(f"\n Respuesta recibida del LLM ({len(codigo)} caracteres)")
+    print(f" ========================= Respuesta recibida del LLM  ==============================")
+    print(f"\n{codigo}\n")
+    print(f" ====================================================================================")
     return codigo
 
 @asset
-def codigo_limpio_ia(codigo_generado_ia: str) -> str:
+def codigo_limpio_ia(context: AssetExecutionContext, codigo_generado_ia: str) -> Output[str]:
     """
     Limpia la respuesta del LLM eliminando bloques de markdown si los hay.
     Envuelve el código en una función generar_plot(df) para su posterior ejecución.
     El código resultante puede ejecutarse directamente con exec().
+    Devuelve un Output con metadatos que indican si se usó el fallback,
+    haciéndolo visible en el lineage de Dagster.
     """
     codigo = codigo_generado_ia
 
@@ -657,24 +670,63 @@ def codigo_limpio_ia(codigo_generado_ia: str) -> str:
         print(f" {n_eliminadas} línea(s) 'import *' eliminadas")
     codigo = "\n".join(lineas_filtradas)
 
-    # Validar sintaxis antes de envolver — reportar el código problemático claramente
+    print(f" ========================= Código generado por la IA (limpio) ==============================")
+    print(f"\n{codigo}\n")
+    print(f" ===========================================================================================")
+
+    # Validar sintaxis antes de envolver — si falla, usar implementación de fallback
     try:
         compile(codigo, '<codigo_ia>', 'exec')
     except SyntaxError as e:
-        lineas = codigo.splitlines()
-        contexto = lineas[max(0, e.lineno - 3): e.lineno + 2] if e.lineno else lineas
-        raise ValueError(
-            f"El código generado por la IA tiene un error de sintaxis: {e}\n"
-            f"Contexto (líneas {max(1, (e.lineno or 1) - 2)}-{(e.lineno or 0) + 2}):\n"
-            + "\n".join(f"  {l}" for l in contexto)
-        ) from e
+        motivo = str(e)
+        context.log.warning(
+            f"[codigo_limpio_ia] SyntaxError en el código del LLM: {motivo}. "
+            "Se ha activado el fallback — el gráfico generado NO proviene de la IA."
+        )
+        # Fallback: implementación hardcodeada que sabemos que funciona.
+        # Usa búsqueda case-insensitive para 'tenerife' evitando fallos por variantes de nombre.
+        codigo_envuelto = (
+            "def generar_plot(df):\n"
+            "    from plotnine import ggplot, aes, geom_line, theme_minimal, labs, scale_color_manual\n"
+            "    islas = sorted(df['isla'].dropna().unique())\n"
+            "    color_map = {isla: '#D3D3D3' for isla in islas}\n"
+            "    tenerife = next((i for i in color_map if 'tenerife' in i.lower()), None)\n"
+            "    if tenerife:\n"
+            "        color_map[tenerife] = '#FF8C00'\n"
+            "    grafico = (\n"
+            "        ggplot(df, aes(x='año', y='valor', color='isla'))\n"
+            "        + geom_line()\n"
+            "        + scale_color_manual(values=color_map)\n"
+            "        + theme_minimal()\n"
+            "        + labs(\n"
+            "            title='Distribución de Renta por Isla - Canarias',\n"
+            "            x='Año',\n"
+            "            y='Valor (€)',\n"
+            "        )\n"
+            "    )\n"
+            "    return grafico"
+        )
+        return Output(
+            value=codigo_envuelto,
+            metadata={
+                "fallback_activado": MetadataValue.bool(True),
+                "motivo_fallback": MetadataValue.text(motivo),
+                "longitud_codigo": MetadataValue.int(len(codigo_envuelto)),
+            },
+        )
 
     # Envolver en función generar_plot(df) indentando cada línea
     lineas_indentadas = "\n".join("    " + linea for linea in codigo.splitlines())
     codigo_envuelto = f"def generar_plot(df):\n{lineas_indentadas}\n    return grafico"
 
-    print(f" Código limpio listo ({len(codigo_envuelto)} caracteres)")
-    return codigo_envuelto
+    context.log.info(f"[codigo_limpio_ia] Código limpio listo ({len(codigo_envuelto)} caracteres)")
+    return Output(
+        value=codigo_envuelto,
+        metadata={
+            "fallback_activado": MetadataValue.bool(False),
+            "longitud_codigo": MetadataValue.int(len(codigo_envuelto)),
+        },
+    )
 
 @asset
 def visualizacion_png(codigo_limpio_ia: str, islas_raw: pd.DataFrame) -> Output:

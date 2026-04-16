@@ -112,12 +112,23 @@ class TestCodigoLimpioIa:
             "El resultado no debe contener comillas tipográficas simples"
         assert "def generar_plot(df):" in resultado
 
-    def test_codigo_con_sintaxis_invalida_lanza_valueerror(self):
-        """Código con SyntaxError irreparable debe lanzar ValueError con contexto claro."""
+    def test_codigo_con_sintaxis_invalida_usa_fallback(self):
+        """Código con SyntaxError irreparable debe devolver la implementación de fallback."""
         codigo_invalido = "def foo(\ngrafico = ggplot()\n"
-        import pytest
-        with pytest.raises(ValueError, match="error de sintaxis"):
-            codigo_limpio_ia(codigo_invalido)
+        resultado = codigo_limpio_ia(codigo_invalido)
+        assert "def generar_plot(df):" in resultado, \
+            "El fallback debe contener la función generar_plot(df)"
+        assert "return grafico" in resultado
+        # El fallback debe ser código Python válido
+        compile(resultado, '<fallback>', 'exec')
+
+    def test_fallback_genera_png_ejecutable(self):
+        """El código de fallback debe poder ejecutarse y generar un gráfico real."""
+        codigo_invalido = "grafico = (p9.ggplot(df, p9.aes(x='año',\n"  # truncado
+        codigo_envuelto = codigo_limpio_ia(codigo_invalido)
+        df = _islas_raw_sintetico()
+        output = visualizacion_png(codigo_envuelto, df)
+        assert Path(output.value).exists()
 
 
 # ===========================================================================
