@@ -564,7 +564,12 @@ def template_ia(islas_raw: pd.DataFrame) -> dict:
         "Responde ÚNICAMENTE con código Python puro. "
         "No incluyas bloques de markdown (``` o similares), no incluyas texto explicativo "
         "ni descripciones fuera del código. "
-        "El código debe poder ejecutarse directamente sin ninguna modificación."
+        "El código debe poder ejecutarse directamente sin ninguna modificación. "
+        "REGLAS ESTRICTAS que debes cumplir sin excepción:\n"
+        "1. NUNCA crees un DataFrame, ni con pd.DataFrame(), ni con diccionarios, ni con ningún otro método. "
+        "El DataFrame ya existe en la variable `df` y debes usarlo directamente.\n"
+        "2. La variable del gráfico DEBE llamarse exactamente `grafico` (sin tilde, sin acento). "
+        "Está terminantemente prohibido usar `gráfico` u otro nombre."
     )
 
     # Incrustar muestra real del DataFrame para que el LLM no genere sus propios datos
@@ -584,6 +589,10 @@ def template_ia(islas_raw: pd.DataFrame) -> dict:
         f"  - Islas presentes: {islas_disponibles}\n"
         f"  - Años presentes:  {años_disponibles}\n"
         f"  - Muestra de los datos reales:\n{muestra_df}\n\n"
+        "PROHIBICIONES (incumplirlas hará que el código falle):\n"
+        "  - NO crees un DataFrame. No uses pd.DataFrame(), pd.read_csv() ni ningún equivalente.\n"
+        "  - USA SIEMPRE la variable `df` que ya existe con los datos reales mostrados arriba.\n"
+        "  - El nombre de la variable del gráfico debe ser exactamente `grafico` (sin tilde, sin acento).\n\n"
         "ESTÉTICAS (aes):\n"
         "  - Eje X → `año`\n"
         "  - Eje Y → `valor`\n"
@@ -669,6 +678,24 @@ def codigo_limpio_ia(context: AssetExecutionContext, codigo_generado_ia: str) ->
     if n_eliminadas:
         print(f" {n_eliminadas} línea(s) 'import *' eliminadas")
     codigo = "\n".join(lineas_filtradas)
+
+    # Normalizar nombre de variable: reemplazar `gráfico` (con tilde) → `grafico`
+    # El LLM a veces ignora la instrucción y usa el nombre con acento
+    if 'gráfico' in codigo:
+        codigo = codigo.replace('gráfico', 'grafico')
+        print(" Variable 'gráfico' renombrada a 'grafico' (sin tilde)")
+
+    # Eliminar líneas que crean DataFrames desde cero (pd.DataFrame, pd.read_csv, etc.)
+    # El LLM a veces genera datos de ejemplo ignorando que `df` ya viene dado
+    PATRON_CREACION_DF = re.compile(
+        r'^\s*(df\s*=\s*(pd\.DataFrame|pd\.read_csv|pd\.read_excel)\s*\()',
+        re.IGNORECASE,
+    )
+    lineas_sin_df = [l for l in codigo.splitlines() if not PATRON_CREACION_DF.match(l)]
+    n_df_eliminadas = len(codigo.splitlines()) - len(lineas_sin_df)
+    if n_df_eliminadas:
+        print(f" {n_df_eliminadas} línea(s) de creación de DataFrame eliminadas")
+    codigo = "\n".join(lineas_sin_df)
 
     print(f" ========================= Código generado por la IA (limpio) ==============================")
     print(f"\n{codigo}\n")
