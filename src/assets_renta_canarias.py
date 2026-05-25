@@ -747,6 +747,26 @@ def codigo_limpio_ia(context: AssetExecutionContext, codigo_generado_ia: str) ->
             },
         )
 
+    # Corregir antipatrón REPL: "grafico = _"
+    # El LLM usa _ para capturar el último resultado de la consola interactiva,
+    # pero dentro de exec() la variable _ no existe. Se busca la línea con ggplot
+    # y se envuelve toda la expresión en "grafico = (...)".
+    if re.search(r'^\s*grafico\s*=\s*_\s*$', codigo, re.MULTILINE):
+        lineas = codigo.splitlines()
+        idx_repl = next(
+            i for i, l in enumerate(lineas)
+            if re.match(r'^\s*grafico\s*=\s*_\s*$', l)
+        )
+        # Localizar la primera línea del bloque ggplot antes de "grafico = _"
+        j = idx_repl - 1
+        while j > 0 and not re.search(r'\bggplot\b', lineas[j]):
+            j -= 1
+        # Reconstruir como asignación directa (la continuación explícita \ ya no es necesaria
+        # porque todo queda dentro de paréntesis implícitos de la asignación)
+        expr = [l.rstrip().rstrip('\\') for l in lineas[j:idx_repl]]
+        codigo = '\n'.join(lineas[:j] + ['grafico = ('] + expr + [')'] + lineas[idx_repl + 1:])
+        print(" Patrón REPL 'grafico = _' reescrito como asignación directa")
+
     # Envolver en función generar_plot(df) indentando cada línea
     lineas_indentadas = "\n".join("    " + linea for linea in codigo.splitlines())
     codigo_envuelto = f"def generar_plot(df):\n{lineas_indentadas}\n    return grafico"

@@ -18,7 +18,7 @@ from pathlib import Path
 from dagster import asset, Output, MetadataValue
 from plotnine import (
     ggplot, aes, geom_map,
-    scale_fill_gradient2, scale_fill_manual,
+    scale_fill_cmap, scale_fill_hue,
     facet_wrap, labs, theme_void, theme, element_text,
 )
 
@@ -175,9 +175,11 @@ def geodata_distribucion_renta(
     ].copy()
 
     # Medida dominante = mayor OBS_VALUE por sección
-    idx = df.groupby("TERRITORIO_CODE")["OBS_VALUE"].idxmax()
+    # Filtrar filas con OBS_VALUE nulo antes del groupby para evitar grupos all-NA
+    df_valid = df[df["OBS_VALUE"].notna()].copy()
+    idx = df_valid.groupby("TERRITORIO_CODE")["OBS_VALUE"].idxmax()
     df_dom = (
-        df.loc[idx.dropna(), ["TERRITORIO_CODE", "MEDIDAS#es", "OBS_VALUE"]]
+        df_valid.loc[idx, ["TERRITORIO_CODE", "MEDIDAS#es", "OBS_VALUE"]]
         .rename(columns={"MEDIDAS#es": "medida_dominante", "OBS_VALUE": "valor_dominante"})
     )
 
@@ -285,17 +287,13 @@ def mapa_renta_media(geodata_renta_media: gpd.GeoDataFrame):
     """
     gdf = geodata_renta_media[geodata_renta_media["OBS_VALUE"].notna()].copy()
     gdf["año_label"] = "Datos " + gdf["año"].astype(int).astype(str)
-    mediana = float(gdf["OBS_VALUE"].median())
 
     return (
         ggplot(gdf)
         + aes(fill="OBS_VALUE")
         + geom_map(color="white", size=0.05)
-        + scale_fill_gradient2(
-            low="#c7251b",
-            mid="#f7f7f7",
-            high="#1a6faf",
-            midpoint=mediana,
+        + scale_fill_cmap(
+            "RdBu_r",
             name="€ / persona",
         )
         + facet_wrap("~ año_label", ncol=3)
@@ -335,18 +333,11 @@ def mapa_fuentes_ingreso(geodata_distribucion_renta: gpd.GeoDataFrame):
         geodata_distribucion_renta["medida_dominante"].notna()
     ].copy()
 
-    categorias = sorted(gdf["medida_dominante"].dropna().unique().tolist())
-    paleta_cualitativa = [
-        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
-        "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
-    ]
-    colores = dict(zip(categorias, paleta_cualitativa[: len(categorias)]))
-
     return (
         ggplot(gdf)
         + aes(fill="medida_dominante")
         + geom_map(color="white", size=0.05)
-        + scale_fill_manual(values=colores, name="Fuente de ingreso\ndominante")
+        + scale_fill_hue(name="Fuente de ingreso\ndominante")
         + labs(
             title="Fuente de ingreso dominante en Tenerife por sección censal",
             subtitle="Sueldo, pensión u otra prestación con mayor peso en cada zona.",
@@ -386,19 +377,11 @@ def mapa_ocupacion(geodata_ocupacion: gpd.GeoDataFrame):
     # Abreviar etiquetas largas para la leyenda
     gdf["ocup_corta"] = gdf["ocupacion_dominante"].str[:50]
 
-    categorias = sorted(gdf["ocup_corta"].dropna().unique().tolist())
-    paleta = [
-        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
-        "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
-        "#bcbd22", "#17becf",
-    ]
-    colores = dict(zip(categorias, paleta[: len(categorias)]))
-
     return (
         ggplot(gdf)
         + aes(fill="ocup_corta")
         + geom_map(color="white", size=0.05)
-        + scale_fill_manual(values=colores, name="Ocupación dominante")
+        + scale_fill_hue(name="Ocupación dominante")
         + labs(
             title=f"Ocupación dominante por sección censal en Tenerife ({ultimo_anio})",
             subtitle="Categoría ocupacional con mayor número de casos por sección.",
@@ -436,19 +419,11 @@ def mapa_actividad(geodata_actividad: gpd.GeoDataFrame):
     # Abreviar etiquetas largas
     gdf["act_corta"] = gdf["actividad_dominante"].str[:50]
 
-    categorias = sorted(gdf["act_corta"].dropna().unique().tolist())
-    paleta = [
-        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
-        "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
-        "#bcbd22", "#17becf", "#aec7e8", "#ffbb78",
-    ]
-    colores = dict(zip(categorias, paleta[: len(categorias)]))
-
     return (
         ggplot(gdf)
         + aes(fill="act_corta")
         + geom_map(color="white", size=0.05)
-        + scale_fill_manual(values=colores, name="Actividad dominante")
+        + scale_fill_hue(name="Actividad dominante")
         + labs(
             title=f"Actividad económica dominante por sección censal en Tenerife ({ultimo_anio})",
             subtitle="Sector con mayor número de casos por sección.",
@@ -479,14 +454,14 @@ def guardar_mapas_secciones(
     mapa_ocupacion,
     mapa_actividad,
 ) -> Output:
-    output_dir = Path(__file__).parent.parent / "outputs" / "pipeline"
+    output_dir = Path(__file__).parent.parent / "outputs" / "pipeline" / "mapas_secciones"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     mapas = {
-        "05_mapa_renta_media.png": mapa_renta_media,
-        "06_mapa_fuentes_ingreso.png": mapa_fuentes_ingreso,
-        "07_mapa_ocupacion.png": mapa_ocupacion,
-        "08_mapa_actividad.png": mapa_actividad,
+        "mapa_renta_media.png": mapa_renta_media,
+        "mapa_fuentes_ingreso.png": mapa_fuentes_ingreso,
+        "mapa_ocupacion.png": mapa_ocupacion,
+        "mapa_actividad.png": mapa_actividad,
     }
 
     rutas_guardadas = []

@@ -64,7 +64,7 @@ def check_no_vacio_renta_media_sc(cargar_renta_media_sc: pd.DataFrame) -> AssetC
 def check_nulos_renta_media_sc(cargar_renta_media_sc: pd.DataFrame) -> AssetCheckResult:
     tasa = cargar_renta_media_sc["OBS_VALUE"].isna().mean()
     return AssetCheckResult(
-        passed=tasa <= 0.20,
+        passed=bool(tasa <= 0.20),
         severity=AssetCheckSeverity.WARN,
         metadata={
             "tasa_nulos": f"{tasa:.1%}",
@@ -130,7 +130,7 @@ def check_no_vacio_distribucion_renta_sc(cargar_distribucion_renta_sc: pd.DataFr
 def check_nulos_distribucion_renta_sc(cargar_distribucion_renta_sc: pd.DataFrame) -> AssetCheckResult:
     tasa = cargar_distribucion_renta_sc["OBS_VALUE"].isna().mean()
     return AssetCheckResult(
-        passed=tasa <= 0.20,
+        passed=bool(tasa <= 0.20),
         severity=AssetCheckSeverity.WARN,
         metadata={
             "tasa_nulos": f"{tasa:.1%}",
@@ -296,7 +296,7 @@ def check_geometria_no_nula(cargar_cartografia: gpd.GeoDataFrame) -> AssetCheckR
 def check_join_renta_media(geodata_renta_media: gpd.GeoDataFrame) -> AssetCheckResult:
     cobertura = geodata_renta_media["OBS_VALUE"].notna().mean()
     return AssetCheckResult(
-        passed=cobertura >= 0.50,
+        passed=bool(cobertura >= 0.50),
         severity=AssetCheckSeverity.WARN,
         metadata={
             "cobertura_join": f"{cobertura:.1%}",
@@ -314,7 +314,7 @@ def check_join_renta_media(geodata_renta_media: gpd.GeoDataFrame) -> AssetCheckR
 def check_join_distribucion_renta(geodata_distribucion_renta: gpd.GeoDataFrame) -> AssetCheckResult:
     cobertura = geodata_distribucion_renta["medida_dominante"].notna().mean()
     return AssetCheckResult(
-        passed=cobertura >= 0.50,
+        passed=bool(cobertura >= 0.50),
         severity=AssetCheckSeverity.WARN,
         metadata={
             "cobertura_join": f"{cobertura:.1%}",
@@ -330,7 +330,7 @@ def check_join_distribucion_renta(geodata_distribucion_renta: gpd.GeoDataFrame) 
 def check_join_ocupacion(geodata_ocupacion: gpd.GeoDataFrame) -> AssetCheckResult:
     cobertura = geodata_ocupacion["ocupacion_dominante"].notna().mean()
     return AssetCheckResult(
-        passed=cobertura >= 0.50,
+        passed=bool(cobertura >= 0.50),
         severity=AssetCheckSeverity.WARN,
         metadata={
             "cobertura_join": f"{cobertura:.1%}",
@@ -346,7 +346,7 @@ def check_join_ocupacion(geodata_ocupacion: gpd.GeoDataFrame) -> AssetCheckResul
 def check_join_actividad(geodata_actividad: gpd.GeoDataFrame) -> AssetCheckResult:
     cobertura = geodata_actividad["actividad_dominante"].notna().mean()
     return AssetCheckResult(
-        passed=cobertura >= 0.50,
+        passed=bool(cobertura >= 0.50),
         severity=AssetCheckSeverity.WARN,
         metadata={
             "cobertura_join": f"{cobertura:.1%}",
