@@ -18,7 +18,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from assets_renta_canarias import codigo_limpio_ia, visualizacion_png
+from src.assets_renta_canarias import codigo_limpio_ia, visualizacion_png
 
 
 # ===========================================================================
@@ -168,4 +168,3 @@ class TestVisualizacionPng:
         output = visualizacion_png(codigo_envuelto, df)
 
         assert Path(output.value).exists()
-

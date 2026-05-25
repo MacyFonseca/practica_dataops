@@ -28,7 +28,7 @@ def cargar_dataset_renta() -> pd.DataFrame:
     Carga el dataset de distribución de rentas en Canarias desde el CSV.
     El dataset contiene información de ingresos por municipio, isla, año y tipo de ingreso.
     Normaliza los nombres de columnas para facilitar su uso en etapas posteriores."""
-    csv_path = Path(__file__).parent / "distribucion-renta-canarias.csv"
+    csv_path = Path(__file__).parent.parent / "data" / "distribucion-renta-canarias.csv"
 
     df = pd.read_csv(csv_path)
 
@@ -50,7 +50,7 @@ def cargar_codigos_municipios() -> pd.DataFrame:
     Proporciona códigos, nombres de municipios e islas para el enriquecimiento de datos.
     Normaliza dinámicamente formato de nombres invertidos (ej: "Palma, La" → "La Palma").
     """
-    csv_path = Path(__file__).parent / "codislas.csv"
+    csv_path = Path(__file__).parent.parent / "data" / "codislas.csv"
 
     df = pd.read_csv(csv_path, sep=';', encoding='latin-1')
 
@@ -85,7 +85,7 @@ def cargar_nivel_estudios() -> pd.DataFrame:
     Carga el archivo nivelestudios.xlsx con información de nivel de estudios.
     Contiene datos desglosados por municipio, sexo, nacionalidad y período.
     """
-    xlsx_path = Path(__file__).parent / "nivelestudios.xlsx"
+    xlsx_path = Path(__file__).parent.parent / "data" / "nivelestudios.xlsx"
 
     df = pd.read_excel(xlsx_path, sheet_name=0)
 
@@ -456,7 +456,7 @@ def grafico_nivel_estudios_distribucion(dataset_estudios_limpio: pd.DataFrame):
 #     Guarda cada gráfico dinámico generado en archivos PNG.
 #     Este asset depende de los gráficos generados dinámicamente.
 #     """
-#     output_dir = Path(__file__).parent / "graficos_salida_pipeline"
+#     output_dir = Path(__file__).parent.parent / "outputs" / "pipeline"
 #     output_dir.mkdir(exist_ok=True)
 
 #     rutas_guardadas = []
@@ -485,7 +485,7 @@ def guardar_graficos_resumen(
     Guarda todos los gráficos de resumen generados en PNG.
     Incluye visualizaciones de ingresos, municipios, islas y nivel de estudios.
     """
-    output_dir = Path(__file__).parent / "graficos_salida_pipeline"
+    output_dir = Path(__file__).parent.parent / "outputs" / "pipeline"
     output_dir.mkdir(exist_ok=True)
 
     # Guardar gráfico de distribución de ingresos
@@ -781,7 +781,7 @@ def visualizacion_png(codigo_limpio_ia: str, islas_raw: pd.DataFrame) -> Output:
     grafico = entorno_ejecucion['generar_plot'](islas_raw)
 
     # Guardar el gráfico como PNG
-    output_dir = Path(__file__).parent / "graficos_salida_pipeline"
+    output_dir = Path(__file__).parent.parent / "outputs" / "pipeline"
     output_dir.mkdir(exist_ok=True)
     ruta = output_dir / "visualizacion_ia.png"
     grafico.save(str(ruta), dpi=300, verbose=False)

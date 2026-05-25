@@ -18,7 +18,7 @@ print("LAB-RENTA: Exploración Iterativa de Rentas en Canarias")
 print("="*70)
 
 # Cargar dataset
-csv_path = Path(__file__).parent / "distribucion-renta-canarias.csv"
+csv_path = Path(__file__).parent.parent / "data" / "distribucion-renta-canarias.csv"
 df = pd.read_csv(csv_path)
 
 # Normalizar columnas
@@ -96,7 +96,7 @@ print("\n✓ Gráfico creado exitosamente")
 grafico_distribucion.show()
 
 
-# PASO 4: GRÁFICO 2 - Tendencia Temporal 
+# PASO 4: GRÁFICO 2 - Tendencia Temporal
 
 print("\n" + "="*70)
 print("GRÁFICO 2: Tendencia Temporal de Ingresos Totales")
@@ -178,7 +178,7 @@ graficos_por_medida = {}
 
 for medida in df_limpio['MEDIDAS#es'].unique():
     df_medida = df_limpio[df_limpio['MEDIDAS#es'] == medida].copy()
-    
+
     grafico = (
         ggplot(df_medida, aes(x='TIME_PERIOD#es', y='OBS_VALUE')) +
         geom_line(color='#1f77b4', size=1) +
@@ -198,7 +198,7 @@ for medida in df_limpio['MEDIDAS#es'].unique():
             axis_text_x=element_text(angle=45, hjust=1),
         )
     )
-    
+
     graficos_por_medida[medida] = grafico
 
 print(f"\n✓ {len(graficos_por_medida)} gráficos individuales creados")
@@ -259,15 +259,15 @@ print("="*70)
 
 for medida in df_limpio['MEDIDAS#es'].unique():
     df_medida = df_limpio[df_limpio['MEDIDAS#es'] == medida].sort_values('TIME_PERIOD#es')
-    
+
     primer_año = df_medida['TIME_PERIOD#es'].min()
     ultimo_año = df_medida['TIME_PERIOD#es'].max()
-    
+
     valor_inicio = df_medida[df_medida['TIME_PERIOD#es'] == primer_año]['OBS_VALUE'].values[0]
     valor_fin = df_medida[df_medida['TIME_PERIOD#es'] == ultimo_año]['OBS_VALUE'].values[0]
     cambio = valor_fin - valor_inicio
     cambio_pct = (cambio / valor_inicio) * 100 if valor_inicio != 0 else 0
-    
+
     print(f"\n{medida}")
     print(f"  {primer_año}: {valor_inicio:.2f}%")
     print(f"  {ultimo_año}: {valor_fin:.2f}%")
@@ -280,7 +280,7 @@ print("\n" + "="*70)
 print("Exportando gráficos")
 print("="*70)
 
-output_dir = Path(__file__).parent / "graficos_salida_lab"
+output_dir = Path(__file__).parent.parent / "outputs" / "lab"
 output_dir.mkdir(exist_ok=True)
 
 print(f"\nDirectorio de salida: {output_dir}")
@@ -316,4 +316,3 @@ try:
     print("✓ Guardado: 05_area.png")
 except Exception as e:
     print(f"✗ Error guardando área: {e}")
-

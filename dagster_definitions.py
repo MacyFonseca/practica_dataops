@@ -15,7 +15,7 @@ from dagster import (
     in_process_executor,
     sensor,
 )
-from assets_renta_canarias import (
+from src.assets_renta_canarias import (
     cargar_dataset_renta,
     cargar_codigos_municipios,
     cargar_nivel_estudios,
@@ -35,7 +35,7 @@ from assets_renta_canarias import (
     visualizacion_png,
     publicar_en_ghpages,
 )
-from checks_pipeline import all_checks
+from src.checks_pipeline import all_checks
 
 
 # Definir el job que ejecuta todos los assets en orden

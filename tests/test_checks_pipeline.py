@@ -10,7 +10,7 @@ directamente sin necesidad de levantar el pipeline de Dagster.
 
 import pandas as pd
 import pytest
-from checks_pipeline import (
+from src.checks_pipeline import (
     # Capa 1 — Extracción
     check_schema_renta,
     check_no_vacio_renta,
