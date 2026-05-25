@@ -1,7 +1,9 @@
-dagster==1.5.0
-dagster-webserver==1.5.0
-pandas==2.0.3
+dagster==1.13.6
+dagster-webserver==1.13.6
+pandas>=2.2.0
 plotnine==0.14.1
 openpyxl>=3.0.0
 pytest>=7.0
 litellm>=1.0.0
+geopandas>=0.14.0
+mapclassify>=2.6

@@ -36,6 +36,23 @@ from src.assets_renta_canarias import (
     publicar_en_ghpages,
 )
 from src.checks_pipeline import all_checks
+from src.assets_secciones import (
+    cargar_renta_media_sc,
+    cargar_distribucion_renta_sc,
+    cargar_ocupacion_sc,
+    cargar_actividad_sc,
+    cargar_cartografia,
+    geodata_renta_media,
+    geodata_distribucion_renta,
+    geodata_ocupacion,
+    geodata_actividad,
+    mapa_renta_media,
+    mapa_fuentes_ingreso,
+    mapa_ocupacion,
+    mapa_actividad,
+    guardar_mapas_secciones,
+)
+from src.checks_secciones import all_checks_secciones
 
 
 # Definir el job que ejecuta todos los assets en orden
@@ -118,8 +135,23 @@ defs = Definitions(
         codigo_limpio_ia,
         visualizacion_png,
         publicar_en_ghpages,
+        # Secciones censales de Tenerife
+        cargar_renta_media_sc,
+        cargar_distribucion_renta_sc,
+        cargar_ocupacion_sc,
+        cargar_actividad_sc,
+        cargar_cartografia,
+        geodata_renta_media,
+        geodata_distribucion_renta,
+        geodata_ocupacion,
+        geodata_actividad,
+        mapa_renta_media,
+        mapa_fuentes_ingreso,
+        mapa_ocupacion,
+        mapa_actividad,
+        guardar_mapas_secciones,
     ],
-    asset_checks=all_checks,
+    asset_checks=all_checks + all_checks_secciones,
     jobs=[renta_canarias_job],
     sensors=[sensor_cambio_datos],
 )
