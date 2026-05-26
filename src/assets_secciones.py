@@ -15,6 +15,7 @@ Gramática de gráficos: ggplot + geom_map + escalas + facetas + tema.
 import geopandas as gpd
 import pandas as pd
 from pathlib import Path
+from shapely.geometry import box as shapely_box
 from dagster import asset, Output, MetadataValue
 from plotnine import (
     ggplot, aes, geom_map,
@@ -125,7 +126,15 @@ def cargar_cartografia() -> gpd.GeoDataFrame:
         geometry="geometry",
         crs=gdfs[0].crs,
     )
-    print(f"\n Cartografía cargada: {len(carto)} filas ({len(_ANIOS_MAPA)} años × secciones)")
+    # Filtrar a secciones de Tenerife isla (excluye La Gomera, La Palma, El Hierro)
+    tenerife_bbox = shapely_box(-16.92, 27.97, -16.05, 28.60)
+    n_antes = len(carto)
+    carto_wgs = carto.to_crs("EPSG:4326")
+    mask = carto_wgs.geometry.centroid.within(tenerife_bbox)
+    carto = carto[mask].copy()
+    carto = gpd.GeoDataFrame(carto, geometry="geometry", crs=gdfs[0].crs)
+    print(f"\n Cartografía cargada: {len(carto)} filas Tenerife ({len(_ANIOS_MAPA)} años × secciones)")
+    print(f"  Descartadas fuera de Tenerife: {n_antes - len(carto)}")
     print(f"  CRS: {carto.crs}")
     return carto
 
@@ -266,6 +275,85 @@ def geodata_actividad(
     return gdf
 
 
+@asset(
+    group_name="secciones_tenerife",
+    description="Ocupación dominante por sección censal, separada por sexo (último año). "
+                "Cross-join cartografía × sexo para mostrar ambos paneles completos.",
+)
+def geodata_ocupacion_por_sexo(
+    cargar_ocupacion_sc: pd.DataFrame,
+    cargar_cartografia: gpd.GeoDataFrame,
+) -> gpd.GeoDataFrame:
+    df = cargar_ocupacion_sc.copy()
+    ultimo_anio = int(df["año"].dropna().max())
+    df = df[df["año"] == ultimo_anio].copy()
+
+    df_agg = (
+        df.groupby(["geocode", "sexo", "ocupacion"])["num_casos"]
+        .sum().reset_index()
+    )
+    idx = df_agg.groupby(["geocode", "sexo"])["num_casos"].idxmax()
+    df_dom = (
+        df_agg.loc[idx.dropna(), ["geocode", "sexo", "ocupacion", "num_casos"]]
+        .rename(columns={"ocupacion": "ocupacion_dominante", "num_casos": "n_casos_dom"})
+    )
+
+    carto_ultimo = cargar_cartografia[cargar_cartografia["año_mapa"] == ultimo_anio].copy()
+    sexos = sorted(df_dom["sexo"].dropna().unique().tolist())
+    carto_x_sexo = gpd.GeoDataFrame(
+        pd.concat([carto_ultimo.assign(sexo=s) for s in sexos], ignore_index=True),
+        geometry="geometry",
+        crs=cargar_cartografia.crs,
+    )
+
+    gdf = carto_x_sexo.merge(df_dom, on=["geocode", "sexo"], how="left")
+    gdf = gpd.GeoDataFrame(gdf, geometry="geometry", crs=cargar_cartografia.crs)
+
+    cobertura = gdf["ocupacion_dominante"].notna().mean()
+    print(f"\n Geodata ocupación por sexo ({ultimo_anio}): {len(gdf)} filas, cobertura {cobertura:.1%}")
+    return gdf
+
+
+@asset(
+    group_name="secciones_tenerife",
+    description="Actividad económica dominante por sección censal, separada por sexo (último año). "
+                "Cross-join cartografía × sexo para mostrar ambos paneles completos.",
+)
+def geodata_actividad_por_sexo(
+    cargar_actividad_sc: pd.DataFrame,
+    cargar_cartografia: gpd.GeoDataFrame,
+) -> gpd.GeoDataFrame:
+    df = cargar_actividad_sc.copy()
+    ultimo_anio = int(df["Periodo"].dropna().max())
+    df = df[df["Periodo"] == ultimo_anio].copy()
+    df = df.rename(columns={"Actividad económica": "actividad", "Sexo": "sexo"})
+
+    df_agg = (
+        df.groupby(["geocode", "sexo", "actividad"])["num_casos"]
+        .sum().reset_index()
+    )
+    idx = df_agg.groupby(["geocode", "sexo"])["num_casos"].idxmax()
+    df_dom = (
+        df_agg.loc[idx.dropna(), ["geocode", "sexo", "actividad", "num_casos"]]
+        .rename(columns={"actividad": "actividad_dominante", "num_casos": "n_casos_dom"})
+    )
+
+    carto_ultimo = cargar_cartografia[cargar_cartografia["año_mapa"] == ultimo_anio].copy()
+    sexos = sorted(df_dom["sexo"].dropna().unique().tolist())
+    carto_x_sexo = gpd.GeoDataFrame(
+        pd.concat([carto_ultimo.assign(sexo=s) for s in sexos], ignore_index=True),
+        geometry="geometry",
+        crs=cargar_cartografia.crs,
+    )
+
+    gdf = carto_x_sexo.merge(df_dom, on=["geocode", "sexo"], how="left")
+    gdf = gpd.GeoDataFrame(gdf, geometry="geometry", crs=cargar_cartografia.crs)
+
+    cobertura = gdf["actividad_dominante"].notna().mean()
+    print(f"\n Geodata actividad por sexo ({ultimo_anio}): {len(gdf)} filas, cobertura {cobertura:.1%}")
+    return gdf
+
+
 # ===========================================================================
 # CAPA 3: VISUALIZACIÓN
 # ===========================================================================
@@ -358,43 +446,42 @@ def mapa_fuentes_ingreso(geodata_distribucion_renta: gpd.GeoDataFrame):
 
 @asset(
     group_name="secciones_tenerife",
-    description="Mapa coroplético de la categoría de ocupación dominante por sección censal "
-                "(último año disponible). ¿Qué tipo de trabajo predomina en cada zona?",
+    description="Mapas facetados de ocupación dominante por sección censal en Tenerife "
+                "(2021, 2022, 2023). Permite observar cambios temporales en la estructura ocupacional.",
 )
-def mapa_ocupacion(geodata_ocupacion: gpd.GeoDataFrame):
+def mapa_ocupacion_por_anio(geodata_ocupacion: gpd.GeoDataFrame):
     """
     Gramática de gráficos:
-      Dataset:   GeoDataFrame con ocupacion_dominante por sección, filtrado al año más reciente.
+      Dataset:   GeoDataFrame con ocupacion_dominante para todos los años disponibles.
       Estética:  fill = ocupacion_dominante (categoría de ocupación).
       Geometría: geom_map() — polígonos de secciones censales.
-      Escala:    scale_fill_manual con paleta cualitativa.
-      Tema:      theme_void() para focalizar en la distribución geográfica.
-    Recomendación de diseño: etiquetas abreviadas para evitar leyenda ilegible;
-    colores categóricos diferenciados.
+      Faceta:    año de datos (2021, 2022, 2023) en 3 paneles.
+      Escala:    scale_fill_hue — paleta cualitativa consistente entre facetas.
+      Tema:      theme_void() para maximizar el área del mapa.
     """
-    ultimo_anio = int(geodata_ocupacion["año"].dropna().max())
-    gdf = geodata_ocupacion[geodata_ocupacion["año"] == ultimo_anio].copy()
-    gdf = gdf[gdf["ocupacion_dominante"].notna()].copy()
-
-    # Abreviar etiquetas largas para la leyenda
-    gdf["ocup_corta"] = gdf["ocupacion_dominante"].str[:50]
+    gdf = geodata_ocupacion[geodata_ocupacion["ocupacion_dominante"].notna()].copy()
+    gdf = gdf[gdf["año"].isin([2021, 2022, 2023])].copy()
+    gdf["ocup_corta"] = gdf["ocupacion_dominante"].str[:45]
+    gdf["año_label"] = gdf["año"].astype(int).astype(str)
 
     return (
         ggplot(gdf)
         + aes(fill="ocup_corta")
         + geom_map(color="white", size=0.05)
-        + scale_fill_hue(name="Ocupación dominante")
+        + scale_fill_hue(name="Ocupación\ndominante")
+        + facet_wrap("~ año_label", ncol=3)
         + labs(
-            title=f"Ocupación dominante por sección censal en Tenerife ({ultimo_anio})",
-            subtitle="Categoría ocupacional con mayor número de casos por sección.",
+            title="Evolución de la ocupación dominante por sección censal en Tenerife (2021–2023)",
+            subtitle="Categoría ocupacional con mayor número de casos por sección y año.",
             caption="Fuente: INE — Censo anual de población",
         )
         + theme_void()
         + theme(
-            figure_size=(15, 10),
+            figure_size=(18, 9),
             plot_background=element_rect(fill="white"),
-            plot_title=element_text(size=14, weight="bold"),
+            plot_title=element_text(size=13, weight="bold"),
             plot_subtitle=element_text(size=10),
+            strip_text=element_text(size=10, weight="bold"),
             legend_position="right",
             legend_text=element_text(size=8),
         )
@@ -403,41 +490,128 @@ def mapa_ocupacion(geodata_ocupacion: gpd.GeoDataFrame):
 
 @asset(
     group_name="secciones_tenerife",
-    description="Mapa coroplético de la actividad económica dominante por sección censal "
-                "(último año disponible). ¿En qué sector trabaja más gente en cada zona?",
+    description="Mapas facetados de actividad económica dominante por sección censal en Tenerife "
+                "(2021, 2022, 2023). Muestra la evolución del tejido económico territorial.",
 )
-def mapa_actividad(geodata_actividad: gpd.GeoDataFrame):
+def mapa_actividad_por_anio(geodata_actividad: gpd.GeoDataFrame):
     """
     Gramática de gráficos:
-      Dataset:   GeoDataFrame con actividad_dominante por sección, filtrado al año más reciente.
-      Estética:  fill = actividad_dominante (sector o categoría de actividad).
+      Dataset:   GeoDataFrame con actividad_dominante para todos los años disponibles.
+      Estética:  fill = actividad_dominante (sector económico).
       Geometría: geom_map() — polígonos de secciones censales.
-      Escala:    scale_fill_manual con paleta cualitativa.
-      Tema:      theme_void() sin ejes ni fondo para maximizar el área del mapa.
+      Faceta:    año de datos (2021, 2022, 2023) en 3 paneles.
+      Escala:    scale_fill_hue — paleta cualitativa consistente entre facetas.
+      Tema:      theme_void().
     """
-    ultimo_anio = int(geodata_actividad["año"].dropna().max())
-    gdf = geodata_actividad[geodata_actividad["año"] == ultimo_anio].copy()
-    gdf = gdf[gdf["actividad_dominante"].notna()].copy()
-
-    # Abreviar etiquetas largas
-    gdf["act_corta"] = gdf["actividad_dominante"].str[:50]
+    gdf = geodata_actividad[geodata_actividad["actividad_dominante"].notna()].copy()
+    gdf = gdf[gdf["año"].isin([2021, 2022, 2023])].copy()
+    gdf["act_corta"] = gdf["actividad_dominante"].str[:45]
+    gdf["año_label"] = gdf["año"].astype(int).astype(str)
 
     return (
         ggplot(gdf)
         + aes(fill="act_corta")
         + geom_map(color="white", size=0.05)
-        + scale_fill_hue(name="Actividad dominante")
+        + scale_fill_hue(name="Actividad\ndominante")
+        + facet_wrap("~ año_label", ncol=3)
         + labs(
-            title=f"Actividad económica dominante por sección censal en Tenerife ({ultimo_anio})",
-            subtitle="Sector con mayor número de casos por sección.",
+            title="Evolución de la actividad económica dominante por sección censal en Tenerife (2021–2023)",
+            subtitle="Sector con mayor número de casos por sección y año.",
             caption="Fuente: INE — Censo anual de población",
         )
         + theme_void()
         + theme(
-            figure_size=(15, 10),
+            figure_size=(18, 9),
             plot_background=element_rect(fill="white"),
-            plot_title=element_text(size=14, weight="bold"),
+            plot_title=element_text(size=13, weight="bold"),
             plot_subtitle=element_text(size=10),
+            strip_text=element_text(size=10, weight="bold"),
+            legend_position="right",
+            legend_text=element_text(size=8),
+        )
+    )
+
+
+@asset(
+    group_name="secciones_tenerife",
+    description="Mapa de ocupación dominante por sección censal en Tenerife, facetado por sexo "
+                "(último año). Compara qué tipo de trabajo predomina entre hombres y mujeres.",
+)
+def mapa_ocupacion_por_sexo(geodata_ocupacion_por_sexo: gpd.GeoDataFrame):
+    """
+    Gramática de gráficos:
+      Dataset:   GeoDataFrame con ocupacion_dominante × sexo (último año).
+      Estética:  fill = ocupacion_dominante (categoría de ocupación).
+      Geometría: geom_map() — polígonos de secciones censales.
+      Faceta:    sexo (Hombres / Mujeres) en 2 paneles.
+      Escala:    scale_fill_hue — paleta cualitativa, colores consistentes entre paneles.
+      Tema:      theme_void().
+    """
+    gdf = geodata_ocupacion_por_sexo[geodata_ocupacion_por_sexo["ocupacion_dominante"].notna()].copy()
+    ultimo_anio = int(geodata_ocupacion_por_sexo["año_mapa"].dropna().max())
+    gdf["ocup_corta"] = gdf["ocupacion_dominante"].str[:45]
+
+    return (
+        ggplot(gdf)
+        + aes(fill="ocup_corta")
+        + geom_map(color="white", size=0.05)
+        + scale_fill_hue(name="Ocupación\ndominante")
+        + facet_wrap("~ sexo", ncol=2)
+        + labs(
+            title=f"Ocupación dominante por sección censal en Tenerife ({ultimo_anio}), por sexo",
+            subtitle="Comparación de la categoría ocupacional predominante entre hombres y mujeres.",
+            caption="Fuente: INE — Censo anual de población",
+        )
+        + theme_void()
+        + theme(
+            figure_size=(14, 9),
+            plot_background=element_rect(fill="white"),
+            plot_title=element_text(size=13, weight="bold"),
+            plot_subtitle=element_text(size=10),
+            strip_text=element_text(size=11, weight="bold"),
+            legend_position="right",
+            legend_text=element_text(size=8),
+        )
+    )
+
+
+@asset(
+    group_name="secciones_tenerife",
+    description="Mapa de actividad económica dominante por sección censal en Tenerife, facetado por sexo "
+                "(último año). ¿En qué sectores trabajan hombres y mujeres en cada zona?",
+)
+def mapa_actividad_por_sexo(geodata_actividad_por_sexo: gpd.GeoDataFrame):
+    """
+    Gramática de gráficos:
+      Dataset:   GeoDataFrame con actividad_dominante × sexo (último año).
+      Estética:  fill = actividad_dominante (sector económico).
+      Geometría: geom_map() — polígonos de secciones censales.
+      Faceta:    sexo (Hombres / Mujeres) en 2 paneles.
+      Escala:    scale_fill_hue — paleta cualitativa.
+      Tema:      theme_void().
+    """
+    gdf = geodata_actividad_por_sexo[geodata_actividad_por_sexo["actividad_dominante"].notna()].copy()
+    ultimo_anio = int(geodata_actividad_por_sexo["año_mapa"].dropna().max())
+    gdf["act_corta"] = gdf["actividad_dominante"].str[:45]
+
+    return (
+        ggplot(gdf)
+        + aes(fill="act_corta")
+        + geom_map(color="white", size=0.05)
+        + scale_fill_hue(name="Actividad\ndominante")
+        + facet_wrap("~ sexo", ncol=2)
+        + labs(
+            title=f"Actividad económica dominante por sección censal en Tenerife ({ultimo_anio}), por sexo",
+            subtitle="Sector económico con mayor presencia en hombres y mujeres por zona.",
+            caption="Fuente: INE — Censo anual de población",
+        )
+        + theme_void()
+        + theme(
+            figure_size=(14, 9),
+            plot_background=element_rect(fill="white"),
+            plot_title=element_text(size=13, weight="bold"),
+            plot_subtitle=element_text(size=10),
+            strip_text=element_text(size=11, weight="bold"),
             legend_position="right",
             legend_text=element_text(size=8),
         )
@@ -450,13 +624,15 @@ def mapa_actividad(geodata_actividad: gpd.GeoDataFrame):
 
 @asset(
     group_name="secciones_tenerife",
-    description="Guarda los 4 mapas de secciones censales como PNG en outputs/pipeline/.",
+    description="Guarda los 6 mapas de secciones censales como PNG en outputs/pipeline/mapas_secciones/.",
 )
 def guardar_mapas_secciones(
     mapa_renta_media,
     mapa_fuentes_ingreso,
-    mapa_ocupacion,
-    mapa_actividad,
+    mapa_ocupacion_por_anio,
+    mapa_actividad_por_anio,
+    mapa_ocupacion_por_sexo,
+    mapa_actividad_por_sexo,
 ) -> Output:
     output_dir = Path(__file__).parent.parent / "outputs" / "pipeline" / "mapas_secciones"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -464,8 +640,10 @@ def guardar_mapas_secciones(
     mapas = {
         "mapa_renta_media.png": mapa_renta_media,
         "mapa_fuentes_ingreso.png": mapa_fuentes_ingreso,
-        "mapa_ocupacion.png": mapa_ocupacion,
-        "mapa_actividad.png": mapa_actividad,
+        "mapa_ocupacion_por_anio.png": mapa_ocupacion_por_anio,
+        "mapa_actividad_por_anio.png": mapa_actividad_por_anio,
+        "mapa_ocupacion_por_sexo.png": mapa_ocupacion_por_sexo,
+        "mapa_actividad_por_sexo.png": mapa_actividad_por_sexo,
     }
 
     rutas_guardadas = []
