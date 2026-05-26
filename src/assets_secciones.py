@@ -19,7 +19,7 @@ from dagster import asset, Output, MetadataValue
 from plotnine import (
     ggplot, aes, geom_map,
     scale_fill_cmap, scale_fill_hue,
-    facet_wrap, labs, theme_void, theme, element_text,
+    facet_wrap, labs, theme_void, theme, element_text, element_rect,
 )
 
 _DATA_DIR = Path(__file__).parent.parent / "data"
@@ -305,6 +305,7 @@ def mapa_renta_media(geodata_renta_media: gpd.GeoDataFrame):
         + theme_void()
         + theme(
             figure_size=(18, 7),
+            plot_background=element_rect(fill="white"),
             plot_title=element_text(size=14, weight="bold"),
             plot_subtitle=element_text(size=10),
             strip_text=element_text(size=10, weight="bold"),
@@ -346,6 +347,7 @@ def mapa_fuentes_ingreso(geodata_distribucion_renta: gpd.GeoDataFrame):
         + theme_void()
         + theme(
             figure_size=(14, 10),
+            plot_background=element_rect(fill="white"),
             plot_title=element_text(size=14, weight="bold"),
             plot_subtitle=element_text(size=10),
             legend_position="right",
@@ -390,6 +392,7 @@ def mapa_ocupacion(geodata_ocupacion: gpd.GeoDataFrame):
         + theme_void()
         + theme(
             figure_size=(15, 10),
+            plot_background=element_rect(fill="white"),
             plot_title=element_text(size=14, weight="bold"),
             plot_subtitle=element_text(size=10),
             legend_position="right",
@@ -432,6 +435,7 @@ def mapa_actividad(geodata_actividad: gpd.GeoDataFrame):
         + theme_void()
         + theme(
             figure_size=(15, 10),
+            plot_background=element_rect(fill="white"),
             plot_title=element_text(size=14, weight="bold"),
             plot_subtitle=element_text(size=10),
             legend_position="right",

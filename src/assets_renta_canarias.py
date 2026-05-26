@@ -16,7 +16,7 @@ from pathlib import Path
 from dagster import asset, Output, MetadataValue, AssetExecutionContext
 from plotnine import (
     ggplot, aes, geom_bar, geom_line, geom_point,
-    theme_minimal, labs, theme, element_text
+    theme_minimal, labs, theme, element_text, element_rect
 )
 import litellm
 
@@ -325,6 +325,7 @@ def grafico_distribucion_ingressos(dataset_renta_limpio: pd.DataFrame):
         theme_minimal() +
         theme(
             figure_size=(12, 6),
+            plot_background=element_rect(fill='white'),
             plot_title=element_text(size=14, weight='bold'),
             axis_title_x=element_text(size=11),
             axis_title_y=element_text(size=11),
@@ -358,6 +359,7 @@ def grafico_tendencia_total(dataset_renta_limpio: pd.DataFrame):
         theme_minimal() +
         theme(
             figure_size=(10, 6),
+            plot_background=element_rect(fill='white'),
             plot_title=element_text(size=14, weight='bold'),
             axis_title_x=element_text(size=11),
             axis_title_y=element_text(size=11),
@@ -392,6 +394,7 @@ def grafico_ingresos_por_isla(dataset_renta_limpio: pd.DataFrame):
         theme_minimal() +
         theme(
             figure_size=(14, 6),
+            plot_background=element_rect(fill='white'),
             plot_title=element_text(size=14, weight='bold'),
             axis_title_x=element_text(size=11),
             axis_title_y=element_text(size=11),
@@ -439,6 +442,7 @@ def grafico_nivel_estudios_distribucion(dataset_estudios_limpio: pd.DataFrame):
         theme_minimal() +
         theme(
             figure_size=(14, 6),
+            plot_background=element_rect(fill='white'),
             plot_title=element_text(size=14, weight='bold'),
             axis_title_x=element_text(size=11),
             axis_title_y=element_text(size=11),
@@ -565,15 +569,22 @@ def template_ia(islas_raw: pd.DataFrame) -> dict:
     system_message = (
         "Eres un experto en visualización de datos con Python y la librería plotnine. "
         "Tu única tarea es generar código Python ejecutable. "
-        "Responde ÚNICAMENTE con código Python puro. "
-        "No incluyas bloques de markdown (``` o similares), no incluyas texto explicativo "
-        "ni descripciones fuera del código. "
-        "El código debe poder ejecutarse directamente sin ninguna modificación. "
-        "REGLAS ESTRICTAS que debes cumplir sin excepción:\n"
-        "1. NUNCA crees un DataFrame, ni con pd.DataFrame(), ni con diccionarios, ni con ningún otro método. "
-        "El DataFrame ya existe en la variable `df` y debes usarlo directamente.\n"
-        "2. La variable del gráfico DEBE llamarse exactamente `grafico` (sin tilde, sin acento). "
-        "Está terminantemente prohibido usar `gráfico` u otro nombre."
+        "Responde ÚNICAMENTE con código Python puro, sin bloques markdown (``` o similares), "
+        "sin texto explicativo fuera del código.\n\n"
+        "GRAMÁTICA DE PLOTNINE — debes seguir EXACTAMENTE este patrón:\n\n"
+        "from plotnine import ggplot, aes, geom_line, scale_color_manual, theme_minimal, labs\n\n"
+        "grafico = (\n"
+        "    ggplot(df, aes(x='col_x', y='col_y', color='col_color'))\n"
+        "    + geom_line()\n"
+        "    + scale_color_manual(values={'CategoriaA': '#FF8C00', 'CategoriaB': '#D3D3D3'})\n"
+        "    + theme_minimal()\n"
+        "    + labs(title='Título', x='Eje X', y='Eje Y')\n"
+        ")\n\n"
+        "PROHIBICIONES ABSOLUTAS:\n"
+        "- NUNCA encadenes métodos sobre un DataFrame (.pipe, .melt, .plotnine, .add_geom, .add_scale, etc.).\n"
+        "- NUNCA uses .factor() — no existe en pandas. Usa pd.Categorical() si necesitas ordenar.\n"
+        "- NUNCA construyas ni leas un DataFrame; usa siempre la variable `df` que ya existe.\n"
+        "- La variable del gráfico debe llamarse exactamente `grafico` (sin tilde)."
     )
 
     # Incrustar muestra real del DataFrame para que el LLM no genere sus propios datos
@@ -584,35 +595,26 @@ def template_ia(islas_raw: pd.DataFrame) -> dict:
     user_message = (
         "Genera código Python con plotnine que produzca el siguiente gráfico "
         "siguiendo la gramática de gráficos de Wickham:\n\n"
-        "DATOS:\n"
-        "  - Dispones de un DataFrame ya cargado llamado `df` con las columnas:\n"
-        "      * `isla`  (str)   — nombre de la isla\n"
-        "      * `año`   (int)   — año de la observación\n"
-        "      * `valor` (float) — valor medio de renta (€)\n"
-        "  - NO debes crear el DataFrame ni leer ningún archivo. Ya viene dado.\n"
-        f"  - Islas presentes: {islas_disponibles}\n"
-        f"  - Años presentes:  {años_disponibles}\n"
-        f"  - Muestra de los datos reales:\n{muestra_df}\n\n"
-        "PROHIBICIONES (incumplirlas hará que el código falle):\n"
-        "  - NO crees un DataFrame. No uses pd.DataFrame(), pd.read_csv() ni ningún equivalente.\n"
-        "  - USA SIEMPRE la variable `df` que ya existe con los datos reales mostrados arriba.\n"
-        "  - El nombre de la variable del gráfico debe ser exactamente `grafico` (sin tilde, sin acento).\n\n"
-        "ESTÉTICAS (aes):\n"
-        "  - Eje X → `año`\n"
-        "  - Eje Y → `valor`\n"
-        "  - Color → `isla`\n\n"
-        "GEOMETRÍA:\n"
-        "  - geom_line()\n\n"
-        "ESCALA DE COLOR:\n"
-        f"  - scale_color_manual con el siguiente diccionario de valores: {color_map_str}\n"
-        "  - Esto resalta Tenerife en naranja (#FF8C00) y deja el resto en gris claro (#D3D3D3)\n\n"
-        "TEMA:\n"
-        "  - theme_minimal()\n\n"
-        "ETIQUETAS:\n"
-        "  - Título: 'Distribución de Renta por Isla - Canarias'\n"
-        "  - Eje X: 'Año'\n"
-        "  - Eje Y: 'Valor (€)'\n\n"
-        "Importa las funciones necesarias de plotnine y asigna el gráfico a una variable llamada `grafico`."
+        "DATOS DISPONIBLES:\n"
+        "  - Variable `df` ya cargada con columnas: `isla` (str), `año` (int), `valor` (float)\n"
+        f"  - Islas: {islas_disponibles}\n"
+        f"  - Años:  {años_disponibles}\n"
+        f"  - Muestra:\n{muestra_df}\n\n"
+        "CÓDIGO QUE DEBES GENERAR (sigue este patrón exacto):\n\n"
+        "from plotnine import ggplot, aes, geom_line, scale_color_manual, theme_minimal, labs\n\n"
+        "grafico = (\n"
+        "    ggplot(df, aes(x='año', y='valor', color='isla'))\n"
+        "    + geom_line()\n"
+        f"    + scale_color_manual(values={color_map_str})\n"
+        "    + theme_minimal()\n"
+        "    + labs(\n"
+        "        title='Distribución de Renta por Isla - Canarias',\n"
+        "        x='Año',\n"
+        "        y='Valor (€)',\n"
+        "    )\n"
+        ")\n\n"
+        "Puedes añadir o ajustar capas (theme, facet_wrap, etc.) pero NUNCA cambies el patrón "
+        "ggplot(...) + capa1 + capa2 + ... ni uses métodos encadenados sobre `df`."
     )
 
     return {
@@ -794,10 +796,8 @@ def visualizacion_png(codigo_limpio_ia: str, islas_raw: pd.DataFrame) -> Output:
     entorno_ejecucion['pd'] = pd
     entorno_ejecucion['p9'] = plotnine  # alias usado habitualmente por los LLMs
 
-    # Ejecutar el código generado por la IA
+    # Ejecutar el código generado por la IA y llamar a la función
     exec(codigo_limpio_ia, entorno_ejecucion)  # nosec B102
-
-    # Llamar a la función generada
     grafico = entorno_ejecucion['generar_plot'](islas_raw)
 
     # Guardar el gráfico como PNG
