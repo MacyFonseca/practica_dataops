@@ -20,7 +20,7 @@ from dagster import asset, Output, MetadataValue
 from plotnine import (
     ggplot, aes, geom_map,
     scale_fill_cmap, scale_fill_hue,
-    facet_wrap, labs, theme_void, theme, element_text, element_rect,
+    facet_wrap, facet_grid, labs, theme_void, theme, element_text, element_rect,
 )
 
 _DATA_DIR = Path(__file__).parent.parent / "data"
@@ -171,8 +171,8 @@ def geodata_renta_media(
 
 @asset(
     group_name="secciones_tenerife",
-    description="Fuente de ingreso dominante por sección: la medida con mayor OBS_VALUE. "
-                "Usa el último año disponible. Join por TERRITORIO_CODE == geocode.",
+    description="Distribución de ingresos por fuente de ingreso y sección censal (último año). "
+                "Mantiene todas las fuentes. Join por TERRITORIO_CODE == geocode.",
 )
 def geodata_distribucion_renta(
     cargar_distribucion_renta_sc: pd.DataFrame,
@@ -183,32 +183,28 @@ def geodata_distribucion_renta(
         cargar_distribucion_renta_sc["año"] == ultimo_anio
     ].copy()
 
-    # Medida dominante = mayor OBS_VALUE por sección
-    # Filtrar filas con OBS_VALUE nulo antes del groupby para evitar grupos all-NA
+    # Todas las fuentes de ingreso por sección (sin filtro de dominante)
     df_valid = df[df["OBS_VALUE"].notna()].copy()
-    idx = df_valid.groupby("TERRITORIO_CODE")["OBS_VALUE"].idxmax()
-    df_dom = (
-        df_valid.loc[idx, ["TERRITORIO_CODE", "MEDIDAS#es", "OBS_VALUE"]]
-        .rename(columns={"MEDIDAS#es": "medida_dominante", "OBS_VALUE": "valor_dominante"})
-    )
+    df_valid = df_valid.rename(columns={"MEDIDAS#es": "fuente_ingreso"})
 
     gdf = cargar_cartografia.merge(
-        df_dom,
+        df_valid[["TERRITORIO_CODE", "fuente_ingreso", "OBS_VALUE"]],
         left_on="geocode",
         right_on="TERRITORIO_CODE",
         how="left",
     )
     gdf = gpd.GeoDataFrame(gdf, geometry="geometry", crs=cargar_cartografia.crs)
 
-    cobertura = gdf["medida_dominante"].notna().mean()
-    print(f"\n Geodata distribución renta (año {ultimo_anio}): {len(gdf)} filas, cobertura {cobertura:.1%}")
+    n_fuentes = gdf["fuente_ingreso"].nunique()
+    cobertura = gdf["OBS_VALUE"].notna().mean()
+    print(f"\n Geodata distribución renta (año {ultimo_anio}): {len(gdf)} filas, {n_fuentes} fuentes, cobertura {cobertura:.1%}")
     return gdf
 
 
 @asset(
     group_name="secciones_tenerife",
-    description="Ocupación dominante por sección: categoría con más casos. "
-                "Agrega por (geocode, año, ocupacion) sumando ambos sexos. Join por geocode.",
+    description="Distribución de ocupaciones por sección censal (todos los años). "
+                "Proporción de cada categoría sobre el total de la sección × año.",
 )
 def geodata_ocupacion(
     cargar_ocupacion_sc: pd.DataFrame,
@@ -223,25 +219,28 @@ def geodata_ocupacion(
         .reset_index()
     )
 
-    # Ocupación dominante por (geocode, año)
-    idx = df_agg.groupby(["geocode", "año"])["num_casos"].idxmax()
-    df_dom = (
-        df_agg.loc[idx.dropna(), ["geocode", "año", "ocupacion", "num_casos"]]
-        .rename(columns={"ocupacion": "ocupacion_dominante", "num_casos": "n_casos_dom"})
+    # Proporción de cada ocupación dentro de la sección × año
+    df_total = (
+        df_agg.groupby(["geocode", "año"])["num_casos"]
+        .sum().reset_index()
+        .rename(columns={"num_casos": "total_seccion"})
     )
+    df_agg = df_agg.merge(df_total, on=["geocode", "año"])
+    df_agg["proporcion"] = df_agg["num_casos"] / df_agg["total_seccion"]
 
-    gdf = cargar_cartografia.merge(df_dom, on="geocode", how="left")
+    gdf = cargar_cartografia.merge(df_agg, on="geocode", how="left")
     gdf = gpd.GeoDataFrame(gdf, geometry="geometry", crs=cargar_cartografia.crs)
 
-    cobertura = gdf["ocupacion_dominante"].notna().mean()
-    print(f"\n Geodata ocupación: {len(gdf)} filas, cobertura {cobertura:.1%}")
+    n_cats = gdf["ocupacion"].nunique()
+    cobertura = gdf["proporcion"].notna().mean()
+    print(f"\n Geodata ocupación: {len(gdf)} filas, {n_cats} categorías, cobertura {cobertura:.1%}")
     return gdf
 
 
 @asset(
     group_name="secciones_tenerife",
-    description="Actividad económica dominante por sección: categoría con más casos. "
-                "Agrega por (geocode, Periodo, Actividad económica). Join por geocode.",
+    description="Distribución de actividades económicas por sección censal (todos los años). "
+                "Proporción de cada categoría sobre el total de la sección × año.",
 )
 def geodata_actividad(
     cargar_actividad_sc: pd.DataFrame,
@@ -256,29 +255,34 @@ def geodata_actividad(
         .reset_index()
     )
 
-    # Actividad dominante por (geocode, Periodo)
-    idx = df_agg.groupby(["geocode", "Periodo"])["num_casos"].idxmax()
-    df_dom = (
-        df_agg.loc[idx.dropna(), ["geocode", "Periodo", "Actividad económica", "num_casos"]]
-        .rename(columns={
-            "Actividad económica": "actividad_dominante",
-            "num_casos": "n_casos_dom",
-            "Periodo": "año",
-        })
-    )
+    # Renombrar para consistencia antes de calcular proporciones
+    df_agg = df_agg.rename(columns={
+        "Actividad económica": "actividad",
+        "Periodo": "año",
+    })
 
-    gdf = cargar_cartografia.merge(df_dom, on="geocode", how="left")
+    # Proporción de cada actividad dentro de la sección × año
+    df_total = (
+        df_agg.groupby(["geocode", "año"])["num_casos"]
+        .sum().reset_index()
+        .rename(columns={"num_casos": "total_seccion"})
+    )
+    df_agg = df_agg.merge(df_total, on=["geocode", "año"])
+    df_agg["proporcion"] = df_agg["num_casos"] / df_agg["total_seccion"]
+
+    gdf = cargar_cartografia.merge(df_agg, on="geocode", how="left")
     gdf = gpd.GeoDataFrame(gdf, geometry="geometry", crs=cargar_cartografia.crs)
 
-    cobertura = gdf["actividad_dominante"].notna().mean()
-    print(f"\n Geodata actividad: {len(gdf)} filas, cobertura {cobertura:.1%}")
+    n_cats = gdf["actividad"].nunique()
+    cobertura = gdf["proporcion"].notna().mean()
+    print(f"\n Geodata actividad: {len(gdf)} filas, {n_cats} categorías, cobertura {cobertura:.1%}")
     return gdf
 
 
 @asset(
     group_name="secciones_tenerife",
-    description="Ocupación dominante por sección censal, separada por sexo (último año). "
-                "Cross-join cartografía × sexo para mostrar ambos paneles completos.",
+    description="Distribución de ocupaciones por sección censal, desglosada por sexo (último año). "
+                "Proporción de cada categoría sobre el total de la sección × sexo.",
 )
 def geodata_ocupacion_por_sexo(
     cargar_ocupacion_sc: pd.DataFrame,
@@ -292,32 +296,29 @@ def geodata_ocupacion_por_sexo(
         df.groupby(["geocode", "sexo", "ocupacion"])["num_casos"]
         .sum().reset_index()
     )
-    idx = df_agg.groupby(["geocode", "sexo"])["num_casos"].idxmax()
-    df_dom = (
-        df_agg.loc[idx.dropna(), ["geocode", "sexo", "ocupacion", "num_casos"]]
-        .rename(columns={"ocupacion": "ocupacion_dominante", "num_casos": "n_casos_dom"})
+    # Proporción de cada ocupación dentro de (sección, sexo)
+    df_total = (
+        df_agg.groupby(["geocode", "sexo"])["num_casos"]
+        .sum().reset_index()
+        .rename(columns={"num_casos": "total_seccion"})
     )
+    df_agg = df_agg.merge(df_total, on=["geocode", "sexo"])
+    df_agg["proporcion"] = df_agg["num_casos"] / df_agg["total_seccion"]
 
     carto_ultimo = cargar_cartografia[cargar_cartografia["año_mapa"] == ultimo_anio].copy()
-    sexos = sorted(df_dom["sexo"].dropna().unique().tolist())
-    carto_x_sexo = gpd.GeoDataFrame(
-        pd.concat([carto_ultimo.assign(sexo=s) for s in sexos], ignore_index=True),
-        geometry="geometry",
-        crs=cargar_cartografia.crs,
-    )
-
-    gdf = carto_x_sexo.merge(df_dom, on=["geocode", "sexo"], how="left")
+    gdf = carto_ultimo.merge(df_agg, on="geocode", how="left")
     gdf = gpd.GeoDataFrame(gdf, geometry="geometry", crs=cargar_cartografia.crs)
 
-    cobertura = gdf["ocupacion_dominante"].notna().mean()
-    print(f"\n Geodata ocupación por sexo ({ultimo_anio}): {len(gdf)} filas, cobertura {cobertura:.1%}")
+    n_cats = gdf["ocupacion"].nunique()
+    cobertura = gdf["proporcion"].notna().mean()
+    print(f"\n Geodata ocupación por sexo ({ultimo_anio}): {len(gdf)} filas, {n_cats} categorías, cobertura {cobertura:.1%}")
     return gdf
 
 
 @asset(
     group_name="secciones_tenerife",
-    description="Actividad económica dominante por sección censal, separada por sexo (último año). "
-                "Cross-join cartografía × sexo para mostrar ambos paneles completos.",
+    description="Distribución de actividades económicas por sección censal, desglosada por sexo (último año). "
+                "Proporción de cada categoría sobre el total de la sección × sexo.",
 )
 def geodata_actividad_por_sexo(
     cargar_actividad_sc: pd.DataFrame,
@@ -332,25 +333,22 @@ def geodata_actividad_por_sexo(
         df.groupby(["geocode", "sexo", "actividad"])["num_casos"]
         .sum().reset_index()
     )
-    idx = df_agg.groupby(["geocode", "sexo"])["num_casos"].idxmax()
-    df_dom = (
-        df_agg.loc[idx.dropna(), ["geocode", "sexo", "actividad", "num_casos"]]
-        .rename(columns={"actividad": "actividad_dominante", "num_casos": "n_casos_dom"})
+    # Proporción de cada actividad dentro de (sección, sexo)
+    df_total = (
+        df_agg.groupby(["geocode", "sexo"])["num_casos"]
+        .sum().reset_index()
+        .rename(columns={"num_casos": "total_seccion"})
     )
+    df_agg = df_agg.merge(df_total, on=["geocode", "sexo"])
+    df_agg["proporcion"] = df_agg["num_casos"] / df_agg["total_seccion"]
 
     carto_ultimo = cargar_cartografia[cargar_cartografia["año_mapa"] == ultimo_anio].copy()
-    sexos = sorted(df_dom["sexo"].dropna().unique().tolist())
-    carto_x_sexo = gpd.GeoDataFrame(
-        pd.concat([carto_ultimo.assign(sexo=s) for s in sexos], ignore_index=True),
-        geometry="geometry",
-        crs=cargar_cartografia.crs,
-    )
-
-    gdf = carto_x_sexo.merge(df_dom, on=["geocode", "sexo"], how="left")
+    gdf = carto_ultimo.merge(df_agg, on="geocode", how="left")
     gdf = gpd.GeoDataFrame(gdf, geometry="geometry", crs=cargar_cartografia.crs)
 
-    cobertura = gdf["actividad_dominante"].notna().mean()
-    print(f"\n Geodata actividad por sexo ({ultimo_anio}): {len(gdf)} filas, cobertura {cobertura:.1%}")
+    n_cats = gdf["actividad"].nunique()
+    cobertura = gdf["proporcion"].notna().mean()
+    print(f"\n Geodata actividad por sexo ({ultimo_anio}): {len(gdf)} filas, {n_cats} categorías, cobertura {cobertura:.1%}")
     return gdf
 
 
@@ -418,28 +416,28 @@ def mapa_fuentes_ingreso(geodata_distribucion_renta: gpd.GeoDataFrame):
     Recomendación de diseño: paleta cualitativa para variables nominales,
     colores suficientemente distintos entre categorías.
     """
-    gdf = geodata_distribucion_renta[
-        geodata_distribucion_renta["medida_dominante"].notna()
-    ].copy()
+    gdf = geodata_distribucion_renta[geodata_distribucion_renta["OBS_VALUE"].notna()].copy()
+    gdf["fuente_corta"] = gdf["fuente_ingreso"].str[:35]
 
     return (
         ggplot(gdf)
-        + aes(fill="medida_dominante")
-        + geom_map(color="white", size=0.05)
-        + scale_fill_hue(name="Fuente de ingreso\ndominante")
+        + aes(fill="OBS_VALUE")
+        + geom_map(color="none", size=0)
+        + scale_fill_cmap("YlOrRd", name="€ / persona")
+        + facet_wrap("~ fuente_corta", ncol=3)
         + labs(
-            title="Fuente de ingreso dominante en Tenerife por sección censal",
-            subtitle="Sueldo, pensión u otra prestación con mayor peso en cada zona.",
+            title="Distribución de las fuentes de ingreso por sección censal en Tenerife",
+            subtitle="Valor medio (€/persona) de cada fuente: sueldos, pensiones, prestaciones…",
             caption="Fuente: ISTAC",
         )
         + theme_void()
         + theme(
-            figure_size=(14, 10),
+            figure_size=(18, 10),
             plot_background=element_rect(fill="white"),
-            plot_title=element_text(size=14, weight="bold"),
+            plot_title=element_text(size=13, weight="bold"),
             plot_subtitle=element_text(size=10),
+            strip_text=element_text(size=9, weight="bold"),
             legend_position="right",
-            legend_text=element_text(size=9),
         )
     )
 
@@ -459,31 +457,30 @@ def mapa_ocupacion_por_anio(geodata_ocupacion: gpd.GeoDataFrame):
       Escala:    scale_fill_hue — paleta cualitativa consistente entre facetas.
       Tema:      theme_void() para maximizar el área del mapa.
     """
-    gdf = geodata_ocupacion[geodata_ocupacion["ocupacion_dominante"].notna()].copy()
-    gdf = gdf[gdf["año"].isin([2021, 2022, 2023])].copy()
-    gdf["ocup_corta"] = gdf["ocupacion_dominante"].str[:45]
-    gdf["año_label"] = gdf["año"].astype(int).astype(str)
+    gdf = geodata_ocupacion[geodata_ocupacion["proporcion"].notna()].copy()
+    ultimo_anio = int(gdf["año"].dropna().max())
+    gdf = gdf[gdf["año"] == ultimo_anio].copy()
+    gdf["ocup_corta"] = gdf["ocupacion"].str[:30]
 
     return (
         ggplot(gdf)
-        + aes(fill="ocup_corta")
-        + geom_map(color="white", size=0.05)
-        + scale_fill_hue(name="Ocupación\ndominante")
-        + facet_wrap("~ año_label", ncol=3)
+        + aes(fill="proporcion")
+        + geom_map(color="none", size=0)
+        + scale_fill_cmap("YlOrRd", name="Proporción\ndel total")
+        + facet_wrap("~ ocup_corta", ncol=4)
         + labs(
-            title="Evolución de la ocupación dominante por sección censal en Tenerife (2021–2023)",
-            subtitle="Categoría ocupacional con mayor número de casos por sección y año.",
+            title=f"Distribución de ocupaciones por sección censal en Tenerife ({ultimo_anio})",
+            subtitle="Proporción de cada categoría sobre el total de ocupados en cada sección.",
             caption="Fuente: INE — Censo anual de población",
         )
         + theme_void()
         + theme(
-            figure_size=(18, 9),
+            figure_size=(20, 12),
             plot_background=element_rect(fill="white"),
             plot_title=element_text(size=13, weight="bold"),
             plot_subtitle=element_text(size=10),
-            strip_text=element_text(size=10, weight="bold"),
+            strip_text=element_text(size=9, weight="bold"),
             legend_position="right",
-            legend_text=element_text(size=8),
         )
     )
 
@@ -503,31 +500,30 @@ def mapa_actividad_por_anio(geodata_actividad: gpd.GeoDataFrame):
       Escala:    scale_fill_hue — paleta cualitativa consistente entre facetas.
       Tema:      theme_void().
     """
-    gdf = geodata_actividad[geodata_actividad["actividad_dominante"].notna()].copy()
-    gdf = gdf[gdf["año"].isin([2021, 2022, 2023])].copy()
-    gdf["act_corta"] = gdf["actividad_dominante"].str[:45]
-    gdf["año_label"] = gdf["año"].astype(int).astype(str)
+    gdf = geodata_actividad[geodata_actividad["proporcion"].notna()].copy()
+    ultimo_anio = int(gdf["año"].dropna().max())
+    gdf = gdf[gdf["año"] == ultimo_anio].copy()
+    gdf["act_corta"] = gdf["actividad"].str[:30]
 
     return (
         ggplot(gdf)
-        + aes(fill="act_corta")
-        + geom_map(color="white", size=0.05)
-        + scale_fill_hue(name="Actividad\ndominante")
-        + facet_wrap("~ año_label", ncol=3)
+        + aes(fill="proporcion")
+        + geom_map(color="none", size=0)
+        + scale_fill_cmap("YlOrRd", name="Proporción\ndel total")
+        + facet_wrap("~ act_corta", ncol=4)
         + labs(
-            title="Evolución de la actividad económica dominante por sección censal en Tenerife (2021–2023)",
-            subtitle="Sector con mayor número de casos por sección y año.",
+            title=f"Distribución de actividades económicas por sección censal en Tenerife ({ultimo_anio})",
+            subtitle="Proporción de cada sector sobre el total de activos en cada sección.",
             caption="Fuente: INE — Censo anual de población",
         )
         + theme_void()
         + theme(
-            figure_size=(18, 9),
+            figure_size=(20, 12),
             plot_background=element_rect(fill="white"),
             plot_title=element_text(size=13, weight="bold"),
             plot_subtitle=element_text(size=10),
-            strip_text=element_text(size=10, weight="bold"),
+            strip_text=element_text(size=9, weight="bold"),
             legend_position="right",
-            legend_text=element_text(size=8),
         )
     )
 
@@ -547,30 +543,29 @@ def mapa_ocupacion_por_sexo(geodata_ocupacion_por_sexo: gpd.GeoDataFrame):
       Escala:    scale_fill_hue — paleta cualitativa, colores consistentes entre paneles.
       Tema:      theme_void().
     """
-    gdf = geodata_ocupacion_por_sexo[geodata_ocupacion_por_sexo["ocupacion_dominante"].notna()].copy()
+    gdf = geodata_ocupacion_por_sexo[geodata_ocupacion_por_sexo["proporcion"].notna()].copy()
     ultimo_anio = int(geodata_ocupacion_por_sexo["año_mapa"].dropna().max())
-    gdf["ocup_corta"] = gdf["ocupacion_dominante"].str[:45]
+    gdf["ocup_corta"] = gdf["ocupacion"].str[:25]
 
     return (
         ggplot(gdf)
-        + aes(fill="ocup_corta")
-        + geom_map(color="white", size=0.05)
-        + scale_fill_hue(name="Ocupación\ndominante")
-        + facet_wrap("~ sexo", ncol=2)
+        + aes(fill="proporcion")
+        + geom_map(color="none", size=0)
+        + scale_fill_cmap("YlOrRd", name="Proporción")
+        + facet_grid("sexo ~ ocup_corta")
         + labs(
-            title=f"Ocupación dominante por sección censal en Tenerife ({ultimo_anio}), por sexo",
-            subtitle="Comparación de la categoría ocupacional predominante entre hombres y mujeres.",
+            title=f"Distribución de ocupaciones por sección censal en Tenerife ({ultimo_anio}), por sexo",
+            subtitle="Proporción de cada categoría sobre el total de ocupados, comparada entre hombres y mujeres.",
             caption="Fuente: INE — Censo anual de población",
         )
         + theme_void()
         + theme(
-            figure_size=(14, 9),
+            figure_size=(22, 8),
             plot_background=element_rect(fill="white"),
-            plot_title=element_text(size=13, weight="bold"),
+            plot_title=element_text(size=12, weight="bold"),
             plot_subtitle=element_text(size=10),
-            strip_text=element_text(size=11, weight="bold"),
+            strip_text=element_text(size=8, weight="bold"),
             legend_position="right",
-            legend_text=element_text(size=8),
         )
     )
 
@@ -590,30 +585,29 @@ def mapa_actividad_por_sexo(geodata_actividad_por_sexo: gpd.GeoDataFrame):
       Escala:    scale_fill_hue — paleta cualitativa.
       Tema:      theme_void().
     """
-    gdf = geodata_actividad_por_sexo[geodata_actividad_por_sexo["actividad_dominante"].notna()].copy()
+    gdf = geodata_actividad_por_sexo[geodata_actividad_por_sexo["proporcion"].notna()].copy()
     ultimo_anio = int(geodata_actividad_por_sexo["año_mapa"].dropna().max())
-    gdf["act_corta"] = gdf["actividad_dominante"].str[:45]
+    gdf["act_corta"] = gdf["actividad"].str[:25]
 
     return (
         ggplot(gdf)
-        + aes(fill="act_corta")
-        + geom_map(color="white", size=0.05)
-        + scale_fill_hue(name="Actividad\ndominante")
-        + facet_wrap("~ sexo", ncol=2)
+        + aes(fill="proporcion")
+        + geom_map(color="none", size=0)
+        + scale_fill_cmap("YlOrRd", name="Proporción")
+        + facet_grid("sexo ~ act_corta")
         + labs(
-            title=f"Actividad económica dominante por sección censal en Tenerife ({ultimo_anio}), por sexo",
-            subtitle="Sector económico con mayor presencia en hombres y mujeres por zona.",
+            title=f"Distribución de actividades económicas por sección censal en Tenerife ({ultimo_anio}), por sexo",
+            subtitle="Proporción de cada sector sobre el total de activos, comparada entre hombres y mujeres.",
             caption="Fuente: INE — Censo anual de población",
         )
         + theme_void()
         + theme(
-            figure_size=(14, 9),
+            figure_size=(22, 8),
             plot_background=element_rect(fill="white"),
-            plot_title=element_text(size=13, weight="bold"),
+            plot_title=element_text(size=12, weight="bold"),
             plot_subtitle=element_text(size=10),
-            strip_text=element_text(size=11, weight="bold"),
+            strip_text=element_text(size=8, weight="bold"),
             legend_position="right",
-            legend_text=element_text(size=8),
         )
     )
 

@@ -312,7 +312,7 @@ def check_join_renta_media(geodata_renta_media: gpd.GeoDataFrame) -> AssetCheckR
     description="Comprueba que el join distribución renta × cartografía cubre al menos el 50% de las secciones",
 )
 def check_join_distribucion_renta(geodata_distribucion_renta: gpd.GeoDataFrame) -> AssetCheckResult:
-    cobertura = geodata_distribucion_renta["medida_dominante"].notna().mean()
+    cobertura = geodata_distribucion_renta["OBS_VALUE"].notna().mean()
     return AssetCheckResult(
         passed=bool(cobertura >= 0.50),
         severity=AssetCheckSeverity.WARN,
@@ -328,7 +328,7 @@ def check_join_distribucion_renta(geodata_distribucion_renta: gpd.GeoDataFrame) 
     description="Comprueba que el join ocupación × cartografía cubre al menos el 50% de las secciones",
 )
 def check_join_ocupacion(geodata_ocupacion: gpd.GeoDataFrame) -> AssetCheckResult:
-    cobertura = geodata_ocupacion["ocupacion_dominante"].notna().mean()
+    cobertura = geodata_ocupacion["proporcion"].notna().mean()
     return AssetCheckResult(
         passed=bool(cobertura >= 0.50),
         severity=AssetCheckSeverity.WARN,
@@ -344,7 +344,7 @@ def check_join_ocupacion(geodata_ocupacion: gpd.GeoDataFrame) -> AssetCheckResul
     description="Comprueba que el join actividad × cartografía cubre al menos el 50% de las secciones",
 )
 def check_join_actividad(geodata_actividad: gpd.GeoDataFrame) -> AssetCheckResult:
-    cobertura = geodata_actividad["actividad_dominante"].notna().mean()
+    cobertura = geodata_actividad["proporcion"].notna().mean()
     return AssetCheckResult(
         passed=bool(cobertura >= 0.50),
         severity=AssetCheckSeverity.WARN,
